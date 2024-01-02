@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bifi-outboard"
+version = "0.1.1"
+description="A Bifacial Capacity Test Outboard POA Measuremnt Research Package"
+#url="https://github.com/jdnewmil/bifi-outboard"
+dependencies = [
+    "numpy>=1.22"
+    , "pandas>=2"
+]
+
+[project.optional-dependencies]
+test = ['pytest', 'tox']
+
+[tox]
+requires = "tox-conda"
+envlist = ['py39', 'py310', 'py311']
+minversion = '4.11.4'
+
+[testenv]
+description = "run the tests with pytest"
+package = 'wheel'
+wheel_build_env = '.pkg'
+conda_channels = 'conda-forge'
+conda_deps = [
+    'pytest>=7'
+    , 'numpy=1.22.3'
+    , 'pvcaptest=0.12.1'
+]
