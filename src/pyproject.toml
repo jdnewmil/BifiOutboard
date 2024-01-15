@@ -3,10 +3,10 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bifi-outboard"
+name = "bifi_outboard"
 version = "0.1.1"
 description="A Bifacial Capacity Test Outboard POA Measuremnt Research Package"
-#url="https://github.com/jdnewmil/bifi-outboard"
+#url="https://github.com/jdnewmil/bifi_outboard"
 dependencies = [
     "numpy>=1.22"
     , "pandas>=2"

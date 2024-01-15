@@ -2,6 +2,9 @@
 
 import argparse
 import numpy as np
+from . import pvsystcsv
+from . import pvcaptest
+from . import outboard_sat
 
 def gen_numbers(n_numbers):
     '''

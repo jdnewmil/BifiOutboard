@@ -1,0 +1,218 @@
+---
+title: "Preliminary analysis"
+format: html
+---
+
+
+```{python}
+import pathlib
+import collections
+import numpy as np
+import pandas as pd
+import bifi_outboard as bo
+import captest as ct
+```
+
+
+```{python}
+dta_dir = pathlib.Path('..') / 'data'
+inventory = pd.read_excel(
+    dta_dir / 'Inventory.xlsx'
+    , sheet_name='PVsyst Runs')
+inventory
+```
+
+
+```{python}
+test_dta = bo.pvsystcsv.read_pvsyst_csv(
+    dta_dir / inventory.loc[0, 'Csvfile']
+    , sep=',')
+test_dta.columns
+```
+
+```{python}
+test_bifi_dta = bo.pvcaptest.io.load_pvsyst_df(
+    dta_dir / inventory.loc[
+        inventory['bifi_sim']
+        & inventory['Orientation'].eq('SAT')
+        & np.isclose(inventory['NearAlbedo'], 0.2)
+        , 'Csvfile'].squeeze()
+    , sep=',')
+test_bifi_dta.columns
+```
+
+## Mono regression
+
+```{python}
+sim = ct.load_pvsyst(dta_dir / inventory.loc[0, 'Csvfile'])
+sim.column_groups
+```
+
+```{python}
+[(name,type(getattr(sim,name))) for name in dir(sim)]
+```
+
+```{python}
+sim.set_regression_cols(
+    power='E_Grid'
+    , poa='irr_poa_'
+    , t_amb='temp_amb_'
+    , w_vel='wind__')
+```
+
+
+```{python}
+sim.plot()
+```
+
+
+```{python}
+sim.reset_filter()
+sim.filter_time(test_date='12/1/1990', days=90)
+sim.filter_pvsyst()
+sim.filter_irr(400, 1000)
+sim.filter_shade(query_str='ShdLoss <= 10')
+```
+
+
+```{python}
+sim.scatter_hv()
+```
+
+```{python}
+sim.get_filtering_table().sum()
+```
+
+```{python}
+sim.fit_regression()
+```
+
+
+```{python}
+def retrieve_mono_params(fname: str) -> pd.Series:
+    sim = ct.load_pvsyst(fname)
+    sim.set_regression_cols(
+        power='E_Grid'
+        , poa='irr_poa_'
+        , t_amb='temp_amb_'
+        , w_vel='wind__')
+    sim.reset_filter()
+    sim.filter_time(test_date='12/1/1990', days=90)
+    sim.filter_pvsyst()
+    sim.filter_irr(400, 1000)
+    sim.filter_shade(query_str='ShdLoss <= 10')
+    sim.fit_regression(summary=False)
+    return sim.regression_results.params
+```
+
+
+```{python}
+retrieve_mono_params(dta_dir / inventory.loc[0, 'Csvfile'])
+```
+
+## Customizable columngroups
+
+```{python}
+bifi_type_defs = collections.OrderedDict([
+    ('irr', ['glob'])
+    , ('temp', ['T_Amb', 'TArray'])
+    , ('wind', ['wind', 'speed'])
+    , ('pf', ['power factor', 'factor', 'pf'])
+    , ('opstate', ['operating state', 'state', 'status'])
+    , ('realpwr', ['real power', 'ac power', 'e_grid', 'eoutinv'])
+    , ('shade', ['fshdbm', 'shd', 'shade'])
+    , ('pvsyt_losses', ['IL Pmax', 'IL Pmin', 'IL Vmax', 'IL Vmin'])
+    , ('index', ['index'])
+])
+
+bifi_sub_type_defs = collections.OrderedDict([
+    ('ghi', ['sun2', 'global horizontal', 'ghi', 'global', 'GlobHor'])
+    , ('rpoa', ['rpoa', 'GlobBak'])
+    , ('poa', ['sun', 'plane of array', 'poa', 'GlobInc'])
+    , ('amb', ['ambient', 't_amb'])
+    , ('mod', ['TArray'])
+    , ('mtr', ['e_grid'])
+    , ('inv', ['eoutinv'])
+])
+
+bifi_irr_sensors_defs = {
+    'refcell': ['reference cell', 'reference', 'referance', 'pvel']
+    , 'pyran': ['pyranometer', 'pyran']
+    , 'clearsky': ['csky']
+}
+bifi_pvsyst_type_defs_list = [
+    bifi_type_defs
+    , bifi_sub_type_defs
+    , bifi_irr_sensors_defs]
+```
+
+```{python}
+bifi_pvsyst_cg = bo.pvcaptest.columngroups.group_columns_generic(
+    data=test_bifi_dta
+    , type_defs=bifi_pvsyst_type_defs_list)
+bifi_pvsyst_cg
+```
+
+## Bifi regression
+
+```{python}
+sample_sat1 = {
+    'latitude': 33.45
+    , 'longitude': -111.983
+    , 'height': 2
+    , 'offset': -10
+    , 'albedo_near': 0.2
+    , 'GCR': 0.334
+}
+```
+
+```{python}
+bdta = bo.pvcaptest.io.load_pvsyst_df(dta_dir / inventory.loc[1, 'Csvfile'])
+```
+
+```{python}
+bdta_aug = (
+    test_bifi_dta
+    .assign(
+        phi_rad=lambda df: np.arccos(
+            bo.outboard_sat.calc_cosphi(
+                AzSol=df['AzSol'], HSol=df['HSol']))
+        , phi_deg=lambda df: np.rad2deg(df['phi_rad'])
+        , psi_rad=lambda df: bo.outboard_sat.calc_psi(
+            phi_rad=df['phi_rad']
+            , height=sample_sat1['height']
+            , offset=sample_sat1['offset'])
+        , psi_deg=lambda df: np.rad2deg(df['psi_rad'])
+        , W=lambda df: bo.outboard_sat.calc_W(
+            psi_rad=df['psi_rad'])
+        , E_sky_rear=lambda df: bo.outboard_sat.calc_E_sky_rear(
+            DiffHor=df['DiffHor']
+            , PhiAng=df['PhiAng'])
+        , E_gnd_rear=lambda df: bo.outboard_sat.calc_E_gnd_rear(
+            GlobGnd=df['GlobGnd']
+            , GlobHor=df['GlobHor']
+            , Alb_Inc=df['Alb_Inc']
+            , BkVFLss=df['BkVFLss']
+            , W=df['W']
+            , albedo_near=sample_sat1['albedo_near']
+            , GCR=sample_sat1['GCR'])
+        , E_rear=lambda df: df['E_gnd_rear'] + df['E_sky_rear'] + df['BmIncBk']
+    )
+)
+bdta_aug
+```
+
+```{python}
+bdta_aug.plot.scatter(x='GlobBak', y='E_rear')
+```
+
+With offset at -10, the under-the-row behavior should dominate and the outboard estimate should approach the average under-the-row behavior.
+
+```{python}
+# bsim = bo.pvcaptest.captest.make_pvsyst_captest(
+#     bdta
+#     , name='pvsyst'
+#     , set_regression_columns=False
+#     , column_groups=bifi_pvsyst_cg)
+# bsim
+```
