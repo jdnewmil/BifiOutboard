@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 
-def calc_cosphi(AzSol: pd.Series, HSol: pd.Series) -> pd.Series:
+def calc_cosphi(AzSol_rad: pd.Series, HSol_rad: pd.Series) -> pd.Series:
     """Calculate cosine of north-south shade angle.
 
     Compute cosine of projected angle from south edge of tracker to ground
@@ -16,23 +16,45 @@ def calc_cosphi(AzSol: pd.Series, HSol: pd.Series) -> pd.Series:
 
     Parameters
     ----------
-    AzSol : pd.Series
-        PVsyst sun azimuth angle values (degrees)
-    HSol : pd.Series
-        PVsyst sun elevation angle values (degrees)
+    AzSol_rad : pd.Series
+        PVsyst sun azimuth angle values (radians)
+    HSol_rad : pd.Series
+        PVsyst sun elevation angle values (radians)
 
     Returns
     -------
     pd.Series
         Values of cosine of shade angle.
     """
-    return (
-        np.cos(np.deg2rad(AzSol))
-        * np.cos(np.deg2rad(HSol)))
+    return np.cos(AzSol_rad) * np.cos(HSol_rad)
+
+
+def calc_betasun(AzSol_rad: pd.Series, HSol_rad: pd.Series) -> pd.Series:
+    """Calculate ideal sun "roll" angle.
+
+    Compute cosine of projected angle viewed from equatorial direction of
+    the sun position in the east-west-zenith plane. Should be
+    equal to PVsyst PhiAng when not backtracking.
+
+    Parameters
+    ----------
+    AzSol_rad : pd.Series
+        PVsyst sun azimuth angle values (radians)
+    HSol_rad : pd.Series
+        PVsyst sun elevation angle values (radians)
+
+    Returns
+    -------
+    pd.Series
+        Values of cosine of sun "roll" angle.
+    """
+    return np.arctan2(
+        np.sin(AzSol_rad) * np.cos(HSol_rad)
+        , np.sin(HSol_rad))
 
 
 def calc_psi_atan2(
-    phi: pd.Series
+    phi_rad: pd.Series
     , height: float or pd.Series
     , offset: float or pd.Series
 ) -> pd.Series:
@@ -45,8 +67,8 @@ def calc_psi_atan2(
 
     Parameters
     ----------
-    phi : pd.Series
-        Projected angle of shade line. (degrees from north horizontal)
+    phi_rad : pd.Series
+        Projected angle of shade line. (radians below north horizontal)
     height : float or pd.Series
         Height above grade at which sensor is mounted in line with
         torque tube axis. Units conventionally in meters, but may
@@ -65,7 +87,6 @@ def calc_psi_atan2(
         Values of projected angle from sensor to shade line. Projection
         plane contains north-south line and zenith direction.
     """
-    phi_rad = np.deg2rad(phi)
     s_phi = np.sin(phi_rad)
     return np.arctan2(
         height * s_phi
@@ -87,7 +108,7 @@ def calc_psi(
     Parameters
     ----------
     phi_rad : pd.Series
-        Projected angle of shade line. (radians from north horizontal)
+        Projected angle of shade line. (radians below north horizontal)
     height : float or pd.Series
         Height above grade at which sensor is mounted in line with
         torque tube axis. Units conventionally in meters, but may
@@ -139,7 +160,7 @@ def calc_W(psi_rad: pd.Series) -> pd.Series:
     return 0.5 * (1 + np.cos(psi_rad))
 
 
-def calc_E_sky_rear(DiffHor: pd.Series, PhiAng: pd.Series) -> pd.Series:
+def calc_E_sky_rear(DiffHor: pd.Series, PhiAng_rad: pd.Series) -> pd.Series:
     """Calculate irradiance on outboard rear from sky.
 
     Parameters
@@ -147,7 +168,7 @@ def calc_E_sky_rear(DiffHor: pd.Series, PhiAng: pd.Series) -> pd.Series:
     DiffHor : pd.Series
         Diffuse horizontal irradiance from sky (W/m2)
     PhiAng : pd.Series
-        PVsyst tracker roll angle. (degrees from horizontal, + to west)
+        PVsyst tracker roll angle. (radians from horizontal, + to west)
 
     Returns
     -------
@@ -155,13 +176,13 @@ def calc_E_sky_rear(DiffHor: pd.Series, PhiAng: pd.Series) -> pd.Series:
         Irradiance contribution from sky on rear facing outboard sensor.
         (W/m2)
     """
-    return 0.5 * (1 - np.cos(np.deg2rad(PhiAng))) * DiffHor
+    return 0.5 * (1 - np.cos(PhiAng_rad)) * DiffHor
 
 
 def calc_E_gnd_rear(
     GlobHor: pd.Series
     , GlobGnd: pd.Series
-    , Alb_Inc: pd.Series
+    , PhiAng_rad: pd.Series
     , BkVFLss: pd.Series
     , W: pd.Series
     , albedo_near: float
@@ -176,8 +197,8 @@ def calc_E_gnd_rear(
     GlobGnd : pd.Series
         Global horizontal irradiance (spatial average) reaching ground
         after blockage from the tracker. (W/m2)
-    Alb_Inc : pd.Series
-        Incident albedo irradiance in the tracker plane. (W/m2)
+    PhiAng_rad : pd.Series
+        PVsyst rotation angle of tracker. (radians)
     BkVFLss : pd.Series
         Loss due to the view Factor for rear side. (W/m2)
     W : pd.Series
@@ -195,8 +216,10 @@ def calc_E_gnd_rear(
         Irradiance contribution from ground on rear facing outboard sensor.
         (W/m2)
     """
-    return (
-        W * (GlobHor * albedo_near - Alb_Inc)
+    # horizontal combined shaded and unshaded ground
+    E_gnd_rear = (
+        W * (GlobHor * albedo_near * 0.5 * (1 + np.cos(PhiAng_rad)))
         + (1 - W) * (GlobGnd * albedo_near / GCR - BkVFLss))
-
+    # rotation about torque tube reduces visible ground
+    return E_gnd_rear
 

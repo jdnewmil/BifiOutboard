@@ -160,9 +160,9 @@ sample_sat1 = {
     'latitude': 33.45
     , 'longitude': -111.983
     , 'height': 2
-    , 'offset': -10
+    , 'offset': 100
     , 'albedo_near': 0.2
-    , 'GCR': 0.334
+    , 'GCR': 0.493
 }
 ```
 
@@ -171,42 +171,109 @@ bdta = bo.pvcaptest.io.load_pvsyst_df(dta_dir / inventory.loc[1, 'Csvfile'])
 ```
 
 ```{python}
+def calc_GlobGnd(
+    GlobHor: pd.Series
+    , DiffHor: pd.Series
+    , betasun: pd.Series
+    , GCR: pd.Series
+) -> pd.Series:
+    beta_critical = np.arccos(GCR)
+    result = DiffHor.copy()
+    beta = betasun.loc[betasun.abs().lt(beta_critical)]
+    F_gnd_shaded = GCR / np.cos(beta)
+    result.loc[beta.index] = (
+        (GlobHor.loc[beta.index] - DiffHor.loc[beta.index])
+        * (1 - F_gnd_shaded))
+    return result
+```
+
+```{python}
 bdta_aug = (
     test_bifi_dta
     .assign(
-        phi_rad=lambda df: np.arccos(
+        AzSol_rad=lambda df: np.deg2rad(df['AzSol'])
+        , HSol_rad=lambda df: np.deg2rad(df['HSol'])
+        , betasun=lambda df: bo.outboard_sat.calc_betasun(
+            AzSol_rad=df['AzSol_rad']
+            , HSol_rad=df['HSol_rad'])
+        , phi_rad=lambda df: np.arccos(
             bo.outboard_sat.calc_cosphi(
-                AzSol=df['AzSol'], HSol=df['HSol']))
+                AzSol_rad=df['AzSol_rad']
+                , HSol_rad=df['HSol_rad']))
         , phi_deg=lambda df: np.rad2deg(df['phi_rad'])
+        , psi0_rad=lambda df: bo.outboard_sat.calc_psi_atan2(
+            phi_rad=df['phi_rad']
+            , height=sample_sat1['height']
+            , offset=sample_sat1['offset'])
         , psi_rad=lambda df: bo.outboard_sat.calc_psi(
             phi_rad=df['phi_rad']
             , height=sample_sat1['height']
             , offset=sample_sat1['offset'])
         , psi_deg=lambda df: np.rad2deg(df['psi_rad'])
+        , PhiAng_rad=lambda df: np.deg2rad(df['PhiAng'])
+        , GlobGnd_calc=lambda df: calc_GlobGnd(
+            GlobHor=df['GlobHor']
+            , DiffHor=df['DiffHor']
+            , betasun=df['betasun']
+            , GCR=sample_sat1['GCR'])
+        , GlobBakUnshd=lambda df: df['GlobBak'] + df['BackShd']
         , W=lambda df: bo.outboard_sat.calc_W(
             psi_rad=df['psi_rad'])
         , E_sky_rear=lambda df: bo.outboard_sat.calc_E_sky_rear(
             DiffHor=df['DiffHor']
-            , PhiAng=df['PhiAng'])
+            , PhiAng_rad=df['PhiAng_rad'])
         , E_gnd_rear=lambda df: bo.outboard_sat.calc_E_gnd_rear(
             GlobGnd=df['GlobGnd']
             , GlobHor=df['GlobHor']
-            , Alb_Inc=df['Alb_Inc']
+            , PhiAng_rad=df['PhiAng_rad']
             , BkVFLss=df['BkVFLss']
             , W=df['W']
             , albedo_near=sample_sat1['albedo_near']
             , GCR=sample_sat1['GCR'])
-        , E_rear=lambda df: df['E_gnd_rear'] + df['E_sky_rear'] + df['BmIncBk']
+        , E_rear=lambda df: df['E_gnd_rear'] + df['DifSBak'] + df['BmIncBk']
+        , E_tot0=lambda df: df['GlobInc'] + df['GlobBak']
     )
 )
 bdta_aug
 ```
 
 ```{python}
-bdta_aug.plot.scatter(x='GlobBak', y='E_rear')
+ax = bdta_aug.plot.scatter(x='GlobBak', y='E_rear', c='PhiAng')
+ax.plot([0, 80], [0, 80], color="red");
 ```
 
 With offset at -10, the under-the-row behavior should dominate and the outboard estimate should approach the average under-the-row behavior.
+
+```{python}
+bdta_aug.plot.scatter(x='GlobGnd', y='GlobGnd_calc');
+```
+
+```{python}
+bdta_aug.plot.scatter(x='AzSol', y='psi_deg');
+```
+
+```{python}
+bdta_aug.plot.scatter(x='AzSol', y='W');
+```
+
+```{python}
+bdta_aug.plot.scatter(x='AzSol', y='PhiAng');
+```
+
+```{python}
+ax = bdta_aug.plot.scatter(x='GlobBakUnshd', y='E_rear', c='AzSol')
+ax.plot([0, 80], [0, 80], color="red");
+```
+
+```{python}
+bdta_aug.plot.scatter(x='AzSol', y='E_sky_rear');
+```
+
+```{python}
+ax = bdta_aug.plot.scatter(x='DifSBak', y='E_sky_rear')
+ax.plot([0, 40], [0, 40], color="red");
+```
+
 
 ```{python}
 # bsim = bo.pvcaptest.captest.make_pvsyst_captest(
@@ -216,3 +283,101 @@ With offset at -10, the under-the-row behavior should dominate and the outboard 
 #     , column_groups=bifi_pvsyst_cg)
 # bsim
 ```
+
+
+## GlobGnd calc (TODO)
+
+Critical angle beyond which no light gets between the rows:
+
+$$
+\beta_{\mathrm{critical}} = \cos^{-1}(\mathrm{GCR})
+$$
+
+For $\left| \beta \right| < \beta_{\mathrm{critical}}$, the fraction of unobstructed GHI reaching the ground would be
+
+$$
+F_{\mathrm{gnd,shaded}} = \frac{\mathrm{GCR}}{\cos{\beta}} 
+$$
+
+
+$$
+\mathrm{GlobGnd}_{\mathrm{calc}} =
+\begin{cases}
+\mathrm{DiffHor} + \left(\mathrm{GlobHor-DiffHor}\right) \cdot (1 - F_{\mathrm{gnd,shaded}}), & \left|\beta \right| < \beta_{\mathrm{critical}} \\
+\mathrm{DiffHor}, & \left|\beta \right| \ge \beta_{\mathrm{critical}}
+\end{cases}
+$$
+
+## PVsyst rear-side irradiance modeling
+
+PVsyst currently employs a view-factor approach to estimating average irradiance across the rear side of the PV array, modified to account for estimated structural shading. The model assumes infinitely-long rows, so there is no "end effect" where bright ground at the row end increases the rear-side irradiance close to the end of the row. An outboard sensor is significantly affected by such effects but is not affected by the structural shading, so our goal is to identify which PVsyst results are most comparable with various capacity test sensor placements, and in particular the outboard placement.
+
+PVsyst begins by computing an estimate for a spatially-averaged irradiance on the ground below the trackers as $\mathrm{GlobGnd}$. This calculation accounts for the reduction in direct irradiance into strips between the rows, as well as obstruction of diffuse irradance. This average is then multiplied by ground albedo to get an estimate of spatially-averaged upwelling irradiance under the array. This horizontal upwelling irradiance is then converted to a tilted orientation by dividing by GCR, and then a portion of that irradiance that escapes upward to the sky between the rows ($BkVLss$ estimated by view-factor geometry) is subtracted to obtain the component of rear irradiance $E_\mathrm{pvsyst,rear,gnd}$ originating from the ground. The component of rear side diffuse irradiance originating from the sky $\mathrm{DifSBak}$ is computed from the circumsolar diffuse as if it were direct normal (cosine of incidence angle) and the isotropic diffuse using the wedge formula, and an average near shade impact from adjacent rows is subtracted. for properly-functioning single-axis trackers the direct normal and circumsolar diffuse will always be zero, but in general the pre-structural-shade rear irradiance estimate obtained by PVsyst is:
+
+$$
+E_\mathrm{pvsyst,rear} = E_\mathrm{pvsyst,rear,gnd} + \mathrm{DifSBak} + \mathrm{BeamBak}
+$$
+
+and then
+
+$$
+\mathrm{GlobBak} = E_\mathrm{pvsyst,rear} - \mathrm{BackShd}
+$$
+
+The PVsyst $\mathrm{GlobBak}$ output is an obvious candidate for comparison with sensors, but this quantity represents a _spatial average_ irradiance that is also _obstructed by structural shading_ objects. So an unobstructed average irradiance could be $\mathrm{GlobBak}+\mathrm{BackShd}$, except that being outboard exposes the sensor to additional irradiance.
+
+## Outboard PVsyst equations
+
+A broadly-used result in diffuse irradiance models is the "wedge" equation, which integrates an assumed uniformly-distributed (isotropic) irradiance source emanating from a portion of the inside of a hemisphere onto a central receiving point where each differential ray is diluted by the cosine of the incidence angle. For two planes intersecting at an angle $\theta$ as in @fig-wedge, the formula is
+
+$$
+\frac{E_{\mathrm{wedge,}\theta}}{E_{\mathrm{hemisphere}}} = \frac{1-\cos{\theta}}{2}
+$$
+
+![Example "irradiance wedge"](figures/sphere_wedge.png){#fig-wedge}
+
+If the deviations from irradiance uniformity are not large, the wedge equation can provide a useful approximate solution for modeling even for somewhat non-uniform irradiance.
+
+In the case of an outboard rear-facing irradiance sensor located along the torque-tube axis of a horizontal single-axis tracker at the end closest to the equator, the edge of a block of trackers casts an approximate "shade line" in the east-west direction, disregarding the sawtooth pattern arising from tracker tilt and the interruptions due to tracker row spacing. The albedo-reflected irradiance south of that shade line can be approximated by the product of the albedo and the local global horizontal irradiance. When the tracker is horizontal, this forms a wedge of bright irradiance in view of the sensor. Complementing this bright wedge is a wedge of partially-shaded ground north of the "shade line". Together, these wedges form a hemisphere for which tracker rotation reduces the visible shaded and unshaded ground and replaces it with a wedge of irradiance from the sky.
+
+$$
+W = \tfrac{1+\cos{\psi}}{2}
+$$
+
+where $\psi$ is the angle in the north-south-zenith plane from the outboard sensor to the east-west "shade line" on the ground (neglecting the sawtooth deviations due to the tracker rotation).
+
+The diffuse irradiance upwelling from unshaded ground is simply the albedo times the global horizontal irradiance, or $E_\mathrm{upwelling,unshaded}=\mathrm{GlobHor} \cdot \mathrm{albedo}_\mathrm{near}$. The diffuse irradiance from the unshaded portion of the ground on a down-facing outboard sensor may be approximated as irradiance from an isotropic wedge from a nadir-facing hemisphere that omits the row-shaded (north-south shade striped) portion of the ground, or
+
+$$
+E_\mathrm{gnd,nadir,unshaded} = W \cdot \mathrm{GlobHor} \cdot \mathrm{albedo}_\mathrm{near}
+$$
+
+Once the outboard sensor rotates with the tracker then the visible portion of the unshaded ground will be further reduced by perpendicular wedge slice arising from the row rotation. While not an exact calculation, the shading wedge fraction can be multiplied by the tracking rotation wedge fraction with less than 1% relative error for most cases, which is on the order of a 0.01% absolute error due to the rear-side energy contribution typically being on the order of 10% of the front-side irradiance contribution.
+
+$$
+E_\mathrm{gnd,rear,unshaded} = W \cdot \mathrm{GlobHor} \cdot \mathrm{albedo}_\mathrm{near} \cdot \tfrac{1 + \cos{\mathrm{PhiAng}}}{2}
+$$
+
+The remaining contribution from the ground arises from the stripes of unshaded and shaded ground north of the east-west "shade line". PVsyst provides the estimate of average downward irradiance underneath the array as $\mathrm{GlobGnd}$ which incorporates direct and diffuse shade contributions from the moving trackers. The reflected irradiance is $\mathrm{GlobGnd} \cdot \mathrm{albedo}_\mathrm{near}$, and the intensity is scaled to the tracker tilt using the ratio of ground area to module area, which is equivalent to dividing by GCR. The upwelling shaded irradiance that misses the trackers to be lost into the sky is $\mathrm{BkVFLss}$. Thus, without applying any wedge calculations PVsyst estimates the raw (prior to structural shading) irradiance available to the rear side from the ground as being:
+
+$$
+E_\mathrm{gnd,rear,shaded,average} = \mathrm{GlobGnd} \cdot \tfrac{\mathrm{albedo}_\mathrm{near}}{\mathrm{GCR}} - \mathrm{BkVFLss}
+$$
+
+From the perspective of the outboard sensor, only a fraction of the irradiance received from the ground arises from shaded ground, so:
+
+$$
+E_\mathrm{gnd,rear,shaded} = (1 - W) \cdot \left(\mathrm{GlobGnd} \cdot \tfrac{\mathrm{albedo}_\mathrm{near}}{\mathrm{GCR}} - \mathrm{BkVFLss} \right)
+$$
+
+
+$$
+E_\mathrm{gnd,rear} =
+E_\mathrm{gnd,rear,unshaded} + E_\mathrm{gnd,rear,shaded}
+$$
+
+The diffuse irradiance from the sky can be modeled using the    
+
+$$
+E_\mathrm{rear} = E_\mathrm{gnd,rear} + \mathrm{DifSBak} + \mathrm{BmIncBk}
+$$
