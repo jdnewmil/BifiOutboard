@@ -1,0 +1,15 @@
+﻿PVObject_=pvSimulFile
+  Comment=With additional backside variables w Geom and Alb_Inc and transp
+  Version=7.3.4
+  Flags=$00
+  FileNameWr=Test Bifi SAT_Project_VC1_HourlyRes_0.CSV
+  VarIdentWr=viGlobHor,viDiffHor,viBeamHor,viT_Amb,viWindVel,viGlobInc,viShdLoss,viIAMLoss,viGlobEff,viEArrNom,viGIncLss,viTempLss,viModQual,viMisLoss,viOhmLoss,viEArrMPP,viEArray,viTArray,viIL_Oper,viIL_Pmin,viIL_Pmax,viIL_Vmin,viEOutInv,viE_Grid,viUArray,viInvLoss,viIL_Vmax,viGlobBak,contd,
+  VarIdentWr_contd=viGlobGnd,viReflLss,viBkVFLss,viDifSBak,viBackShd,viBmIncBk,viBmSFBak,viBeamBak,viHSol,viAzSol,viAngProf,viPhiAng,viBeamTrp,viDifITrp,viCircTrp,viHBndTrp,viAlbTrp,viGlobTrp,
+  Units=uiW,uiW_m2,uim3_h,uimeterW,
+  TypeValW=Hour
+  Separator=$002C
+  DecimalSep=$002E
+  NCarCol=6
+  ASCIIFmt=1
+  DatesFmt=2
+End of TSimulFich
