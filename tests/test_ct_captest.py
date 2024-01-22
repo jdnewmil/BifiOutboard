@@ -2,7 +2,7 @@
 
 import pathlib
 import bifi_outboard as bob
-import captest as ct
+import bifi_outboard.captest as ct
 
 
 dtadir = pathlib.Path('data')

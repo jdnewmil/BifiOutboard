@@ -2,7 +2,7 @@
 
 import collections
 import pandas as pd
-import captest as ct
+from .. import captest as ct
 
 
 def group_columns_generic(

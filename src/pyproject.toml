@@ -28,5 +28,5 @@ conda_channels = 'conda-forge'
 conda_deps = [
     'pytest>=7'
     , 'numpy=1.22.3'
-    , 'pvcaptest=0.12.1'
 ]
+#     , 'pvcaptest=0.12.1'

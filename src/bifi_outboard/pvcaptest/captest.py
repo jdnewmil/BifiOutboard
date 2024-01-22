@@ -1,7 +1,7 @@
 # captest.py
 
 import pandas as pd
-import captest as ct
+from .. import captest as ct
 from . import columngroups
 
 

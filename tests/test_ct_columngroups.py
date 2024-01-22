@@ -3,7 +3,7 @@
 import collections
 import pandas as pd
 import bifi_outboard as bob
-import captest as ct
+import bifi_outboard.captest as ct
 
 def test_group_columns_generic():
     t1 = [
