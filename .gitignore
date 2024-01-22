@@ -162,3 +162,8 @@ cython_debug/
 analysis/prelim_files
 settings.json
 analysis/prelim.html
+pvsc52/*.html
+pvsc52/*.pdf
+pvsc52/*.tex
+pvsc52/_freeze
+pvsc52/Pvsc52_files
