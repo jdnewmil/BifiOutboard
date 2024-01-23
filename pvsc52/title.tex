@@ -1,0 +1,15 @@
+% paper title
+% can use linebreaks \\ within to get better formatting as desired
+% Do not put math or special symbols in the title.
+$if(title)$
+\title{$title$$if(thanks)$\thanks{$thanks$}$endif$}
+$endif$
+
+\author{
+    \IEEEauthorblockN{
+        $for(by-author/allbutlast)$
+        $author.tex()$$sep$,~$endfor$ and~${ by-author/last:author.tex() }}
+    \IEEEauthorblockA{
+        DNV Energy USA Inc., Oakland, Ca, 94612, US
+    }
+}
