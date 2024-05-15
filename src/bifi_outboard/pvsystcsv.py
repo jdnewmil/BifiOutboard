@@ -3,7 +3,13 @@
 import pandas as pd
 
 
-def read_pvsyst_csv(full_fname: str, sep=";", dayfirst=False, encoding="ISO8859"):
+def read_pvsyst_csv(
+    full_fname: str
+    , sep=";"
+    , dayfirst=False
+    , encoding="ISO8859"
+    , date_format=None
+) -> pd.DataFrame:
     """Simple PVsyst simulation data reader.
 
     To get at the simulation results in a PVsyst hourly output file,
@@ -19,6 +25,8 @@ def read_pvsyst_csv(full_fname: str, sep=";", dayfirst=False, encoding="ISO8859"
         Whether to assume DMY (or if False then MDY), by default False
     encoding : str, optional
         Encoding to assume for the data file text, by default "ISO8859".
+    date_format : str, optional
+        Format for date column. Typically '%m/%d/%y %H:%M'. Default None.
 
     Returns
     -------
@@ -38,5 +46,6 @@ def read_pvsyst_csv(full_fname: str, sep=";", dayfirst=False, encoding="ISO8859"
         , dayfirst=dayfirst
         , index_col='date'
         , parse_dates=[0]
-        , encoding=encoding)
+        , encoding=encoding
+        , date_format=date_format)
     return dta

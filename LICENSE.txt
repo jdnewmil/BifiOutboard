@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2024 Jeff Newmiller, see also file PVCAPTEST_LICENSE.txt for vendored code from Ben TaylorXT
+Copyright (c) 2024 Jeff Newmiller
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the

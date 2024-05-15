@@ -1,0 +1,15 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Asymptote build task",
+            "type": "shell",
+            "command": "asy ${relativeFile}",
+            "options": {},
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}

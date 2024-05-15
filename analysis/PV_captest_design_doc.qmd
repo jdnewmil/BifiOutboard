@@ -1,0 +1,1497 @@
+---
+title: "PV Capacity Test design document"
+format:
+    html:
+        self-contained: true
+toc: true
+---
+
+
+```{mermaid}
+classDiagram
+    class SCADAFormatType {
+        + FormatType : str
+        + MetadataFname : str
+    }
+    class SCADAFormat {
+        + Format : str
+        + TimeStdColumn : str
+        + Description : str
+    }
+    SCADAFormatType "1" -- "*" SCADAFormat
+    class SCADADataSet {
+        + sds_label : str
+        + BaseName : str
+        + DSTimeColumn : str
+        + Description: str
+    }
+    SCADAFormat "1" -- "*" SCADAColumn
+    class SCADAColumn {
+        + Column : str
+        + StdColumn : str
+        + Type : str
+        + SensorType : str
+        + SensorGroup : str
+        + SensorGroupNo : int
+    }
+    class PVSystem {
+        + system_label : str
+        + StdTZ : str
+        + SiteLat : float
+        + SiteLon : float
+        + SiteAltitude : float
+        + NomTilt : float
+        + NomAz : float
+    }
+    class SCADAFile {
+        + Fname : str
+        + Format : str
+        + Sheet : str
+        + Range : str
+        + RecordedTZ : str
+    }
+    SCADAFile "*" -- "1" SCADAFormat
+    SCADAFile "*" -- "*" SCADADataSet
+    PVSystem "1" -- "*" SCADADataSet
+    class PVSystemQCInterval {
+        + begin : str
+        + end : Datetime
+        + type : Datetime
+        + comment : str
+    }
+    class QCSetData {
+        + qcsd_label : str
+        + period_spec : str
+    }
+    class QCRedundantSetData {
+        + qcrsd_label : str
+    }
+    class QCWeightedSetData {
+        + qcwsd_label : str
+    }
+    PVSystem "1" -- "*" PVSystemQCInterval
+    SCADADataSet "1" -- "*" QCSetData
+    SCADAQCSet "1" -- "*" QCSetData
+    QCSetData "1" -- "*" QCRedundantSetData
+    QCRedundantSetData "1" -- "*" QCWeightedSetData
+    class RegressionModel {
+        + regression_model_label : str
+        + formula str
+        + input_names tuple[str]
+        + fit(data) ModelFit
+    }
+    class RM_ASTM_E2848 {
+        + formula() str
+        + variables() list[str]
+        + model(data) StatsModel
+    }
+    class RM_DNVBifiA {
+        + formula() str
+        + variables() list[str]
+        + model(data) StatsModel
+    }
+    class RM_DNVBifiB {
+        + formula() str
+        + variables() list[str]
+        + model(data) StatsModel
+    }
+    RegressionModel <|-- RM_ASTM_E2848
+    RegressionModel <|-- RM_DNVBifiA
+    RegressionModel <|-- RM_DNVBifiB
+    class ReferenceCondition {
+        + rc_label : str
+    }
+    class RC_ASTM {
+        + E : float
+        + T_a : float
+        + v : float
+    }
+    ReferenceCondition <|-- RC_ASTM
+    class RC_DNVBifiA {
+        + E_front : float
+        + E_rear : float
+        + T_a : float
+        + v : float
+    }
+    ReferenceCondition <|-- RC_DNVBifiA
+    class RC_DNVBifiB {
+        + E_front : float
+        + E_rear : float
+        + T_c : float
+    }
+    ReferenceCondition <|-- RC_DNVBifiB
+    class TestCondition {
+        + test_condition_label : str
+        + PwrACMin : float
+        + POAMin : float
+        + SpecIrrRef : float
+        + SpecTambRef : float
+        + SpecWSRef : float
+        + Test_AggInterval : float
+        + Test_QCColBase : str
+        + Test_IrrPOAColName : str
+        + Test_TmpAmbColName : str
+        + Test_SpdWindColName : str
+        + Test_PwrACColName : str
+        + Test_PwrACMult : str
+        + Test_PwrInvACColName : str
+        + Test_DtmColName : str
+        + Test_QCOk : str
+        + Test_PreQCColName : str
+        + Test_PreQCOk : str
+        + Test_RtgInterval : str
+        + Test_RtgPlevel : float
+    }
+    QCWeightedSetData "1" -- "*" TestCondition
+    class SCADAQCSet {
+        + qcs_label : str
+    }
+    class SCADAQCSetQCInterval {
+        + begin : str
+        + end : Datetime
+        + type : Datetime
+        + comment : str
+    }
+    SCADAQCSet "1" -- "*" SCADAQCSetQCInterval
+    class SCADASensorQCInfo {
+        + sensor_col : str
+        + missing_label : str
+        + min_value : float
+        + min_label : str
+        + max_value : float
+        + max_label : str
+    }
+    SCADAQCSet "1" -- "*" SCADASensorQCInfo
+    class SCADAQCStuckChannel {
+        + std_column : str
+        + MaxRows : int
+        + Threshold : float
+        + StuckMark : str
+    }
+    SCADAQCSet "1" -- "*" SCADAQCStuckChannel
+    class SCADARedundantColumn {
+        name: str
+        redundant_function: str
+        rel_diff: float
+        rel_mark: str
+        abs_diff: float
+        abs_mark: str
+    }
+    QCRedundantSetData "1" -- "*" SCADARedundantColumn
+    class SCADARedundantValueColumn {
+        value_col: str
+    }
+    SCADARedundantColumn "1" -- "*" SCADARedundantValueColumn
+    class SCADAWeightedColumn {
+        name : str
+        computed_function : str
+    }
+    QCWeightedSetData "1" -- "*" SCADAWeightedColumn
+    class SCADAWeightedValueColumn {
+        value_column : str
+        Weight : float
+    }
+    SCADAWeightedColumn "1" -- "*" SCADAWeightedValueColumn
+```
+
+- `SCADAFormat` defines the columns in a timeseries data file or files. Columns can be ignored to save memory (e.g. if there are data for multiple `SCADADataSet`s in separate columns in a file.)
+- `SCADAFile` represents a data file containing all or a portion of a time-series data set.
+- `SCADADataSet` defines a timestamp-indexed set of columns representing data for one `SCADASystem`, as stored in one or more `SCADAFile` files. The `BaseName` attribute indicates the path to a common directory from which all `SCADAFile` `Fname`s are to be relative to. E.g. `BaseName` might be `./data` indicating the data subdirectory of the current working director for the script, and the `Fname` might be `test1/file1.csv` so the complete path to access the file would be `./data/test1/file1.csv`. This allows the first grouping of files in `./data20240501` used in an early analysis to be left alone, and by copying that directory and its contents to another directory `./data20240601/` and adding, replacing, or deleting files there a new `SCADDataSet` can be declared and the `SCADAFile`s can be copied without modification other than pointing to the new `SCADADataSet`.
+
+
+```{mermaid}
+erDiagram
+    SCADAFormatType ||--o{ SCADAFormat : meta
+    SCADAFormat ||--|{ SCADAColumn : contains
+    SCADAFormat ||--o{ SCADAFile : stored_using
+    SCADAFile }o--o{ SCADADataSet : comprises
+    PVSystem ||--o{ SCADADataSet : characterizes
+    PVSystem ||--o{ PVSystemQCInterval : hardware_related
+    SCADADataSet ||--o{ QCSetData : applied_to
+    SCADAQCSet ||--o{ QCSetData : defines
+    QCSetData ||--o{ QCRedundantSetData : derives_from
+    QCRedundantSetData ||--o{ QCWeightedSetData : derives_from
+    QCWeightedSetData ||--o{ TestCondition : uses
+    SCADAQCSet ||--o{ SCADAQCSetQCInterval : defines
+    SCADAQCSet ||--o{ SCADASensorQCInfo : used_in
+    SCADAQCSet ||--o{ SCADAQCStuckChannel : used_in
+    QCRedundantSetData ||--o{ SCADARedundantColumn : used_in
+    SCADARedundantColumn ||--o{ SCADARedundantValueColumn : input_to
+    QCWeightedSetData ||--o{ SCADAWeightedColumn : used_in
+    SCADAWeightedColumn ||--o{ SCADAWeightedValueColumn : input_to
+```
+
+## Prototyping
+
+```{python}
+from dataclasses import dataclass
+import pathlib
+from typing import Protocol, Iterable, Any, Callable, Optional, TypeAlias, Iterator
+from numpy.typing import ArrayLike
+import numpy as np
+import pandas as pd
+import pandas.core.groupby.generic as pdgeneric
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+import statsmodels.graphics as smg
+from io import StringIO
+from ruamel.yaml import YAML, yaml_object
+import bifi_outboard.outboard_sat as boosat
+import bifi_outboard.captest_prototype.io as ctpio
+import bifi_outboard.captest_prototype.column_selection as ctpcs
+import bifi_outboard.captest_prototype.captest_info as ctpci
+import bifi_outboard.captest_prototype.model as ctpmp
+import bifi_outboard.captest_prototype.model_ols as ctpmo
+import matplotlib.pyplot as plt
+import plotnine as p9
+# import mizani as mz
+from mizani.breaks import date_breaks
+import bifi_outboard.captest_prototype.model_ols as model_ols
+import bifi_outboard.captest_prototype.sim_study as ctpss
+```
+
+
+```{python}
+dta_dir = pathlib.Path('..') / 'data'
+shts = pd.read_excel(dta_dir / 'Inventory.xlsx', sheet_name=None, header=0)
+shts['Sites'] = shts['Sites'].set_index('SiteLabel')
+shts['Systems'] = shts['Systems'].set_index('SystemLabel')
+shts['PVsyst Runs'] = shts['PVsyst Runs'].set_index(['prj_file', 'variant'])
+```
+
+```{python}
+run_infos = (
+    shts['PVsyst Runs']
+    .join(other=shts['Systems'], how='left', on='SystemLabel')
+    .join(other=shts['Sites'], how='left', on='SiteLabel'))
+```
+
+```{python}
+run_info = (
+    run_infos
+    .loc[('Test Bifi SAT_Project.PRJ', 'SAT Az0 (bifi)'), :])
+```
+
+```{python}
+# def bifi_comparison_reference_calculation(
+#     method: str
+#     , default_rc: dict[str, Any]
+# ) -> ctpmp.ReferenceCondition:
+#     if 'Fixed' == method:
+#         return ctpmp.FixedReferenceCondition(reference_inputs=default_rc)
+#     elif 'EquivalentPosition' == method:
+#         return EquivalentPositionReferenceCondition()
+```
+
+```{python}
+base_offset = 0.5
+ti0, ti1 = ctpss.define_sample_captests(run_info=run_info, base_offset=base_offset)
+
+sample0 = ctpcs.object_to_yaml_str(ti0)
+print(sample0)
+```
+
+```{python}
+ctpcs.yaml.load(sample0)
+```
+
+```{python}
+# ti1 = ctpci.OLSCapTestInfo(model_rc_spec=mrcs1, computed_set_data=qcwsd1)
+print(ctpcs.object_to_yaml_str(ti1))
+```
+
+```{python}
+scc1b = {
+    'E_front': ctpcs.SCADAComputedColumn(
+        computed_function='Linear'
+        , computed_value_columns={'GlobInc': 1.0}
+        , cf_params={})
+    , 'E_rear': ctpcs.SCADAComputedColumn(
+        computed_function='Linear'
+        , computed_value_columns={'E_rear_outboard': 1.0}
+        , cf_params={})
+    , 'T_a': ctpcs.SCADAComputedColumn(
+        computed_function='Linear'
+        , computed_value_columns={'T_Amb': 1.0}
+        , cf_params={})
+    , 'v': ctpcs.SCADAComputedColumn(
+        computed_function='Linear'
+        , computed_value_columns={'WindVel': 1.0}
+        , cf_params={})
+    , 'P': ctpcs.SCADAComputedColumn(
+        computed_function='Linear'
+        , computed_value_columns={'EOutInv': 1.0}
+        , cf_params={})
+    }
+
+qcrsd1 = ctpcs.QCRedundantSetData(
+    redundant_columns={})
+
+qcwsd1b = ctpcs.QCComputedSetData(
+    computed_columns=scc1b
+    , redundant_data=qcrsd1)
+
+mrcs1b = ctpci.ModelOLSRCSpec(
+    reference_spec=ctpci.FixedReferenceCondition(
+        reference_inputs={
+            'E_front': 605, 'E_rear': 107, 'T_a': 20.0, 'v': 3.5})
+    , conf_level=0.95
+    , **ctpci.default_model_info['DNV_Bifi_ASTM'])
+
+ti1b = ctpci.OLSCapTestInfo(
+    model_rc_spec=mrcs1b
+    , computed_set_data=qcwsd1b)
+print(ctpcs.object_to_yaml_str(ti1b))
+```
+
+```{python}
+model_cols = (
+    set(ti1.model_rc_spec.reference_spec.reference_variables)
+    | set([ti1.model_rc_spec.output_col_name]))
+model_cols
+```
+
+```{python}
+c_cols, c_missing_cols = ti1.computed_set_data.seek_cols(
+    missing_cols=model_cols)
+(c_cols, c_missing_cols)
+```
+
+```{python}
+r_cols, r_missing_cols = ti1.computed_set_data.redundant_data.seek_cols(
+    missing_cols=c_missing_cols)
+(r_cols, r_missing_cols)
+```
+
+
+```{python}
+dsdta = ctpio.read_pvsyst_hourly(
+    dta_dir / run_info['Csvfile']
+    , sep=run_info['sep']
+    , dayfirst=run_info['dayfirst'])
+dsdta
+```
+
+```{python}
+dsdta_aug = ctpss.augment_sim_data(er_df=dsdta, run_info=run_info, offset=base_offset)
+```
+
+```{python}
+ds_cols, ds_missing_cols = ctpcs.seek_dataset_cols(
+    dsdta_aug.columns
+    , missing_cols=r_missing_cols)
+(ds_cols, ds_missing_cols)
+```
+
+```{python}
+qc_col = pd.Series('Ok', index=dsdta_aug.index)
+qc_col = qc_col.where(dsdta_aug['GlobInc'].ge(400.0), 'Low GlobInc')
+qc_col = qc_col.where(dsdta_aug['EOutInv'].le(0.995 * dsdta_aug['EOutInv'].max()), 'Clipped power')
+qc_col = pd.Categorical(qc_col, categories=['Ok', 'Low GlobInc', 'Clipped power'])
+```
+
+```{python}
+(
+    p9.ggplot(
+        dsdta_aug
+        , p9.aes(x='GlobInc', y='EOutInv', color=qc_col)
+    )
+    + p9.geom_point(size=0.5, alpha=0.2)
+    + p9.scale_color_manual(values=['black', 'blue', 'red'])
+)
+```
+
+```{python}
+qcdta = dsdta_aug.loc['Ok'==qc_col, list(ds_cols)]
+qcdta
+```
+
+
+```{python}
+if ds_missing_cols:
+    raise ValueError("Required column names not found: {ds_missing_cols}")
+```
+
+```{python}
+qcdta_red = ti1.computed_set_data.redundant_data.combine(
+    qcdta
+    , list(r_missing_cols - r_cols))
+qcdta_red
+```
+
+```{python}
+qcdta_calc = ti1.computed_set_data.compute(
+    qcdta_red
+    , list(c_missing_cols - r_cols))
+qcdta_calc
+```
+
+```{python}
+reference_inputs = (
+    ti1
+    .model_rc_spec
+    .build_reference_inputs(dta_key=True, qcdta_redundant=qcdta_red))
+model = ti1.model_rc_spec.build_model(
+    qcdta_calc
+    , reference_inputs=reference_inputs)
+model_fit = model.fit()
+model_fit.predict(pd.Series(reference_inputs))
+```
+
+```{python}
+monthly_fits = ctpci.mr_fitconf_combine(
+    ti0.model_runner(
+        gdf=qcdta.resample('MS')
+        , gdf_columns=qcdta.columns)
+    , key_names=['MonthBegin', 'Ref. Number'])
+monthly_fits
+```
+
+```{python}
+#| label: fig-monthly-fits-mono
+#| fig-cap: Monthly ASTM Monofacial fits
+(
+    p9.ggplot(
+        monthly_fits.reset_index()
+        , p9.aes(x='MonthBegin', y='fit', ymin='lwr', ymax='upr'))
+    + p9.geom_errorbar()
+    + p9.geom_point()
+)
+```
+
+## Bifacial monthly fits
+
+```{python}
+qc_col1b = pd.Series('Ok', index=dsdta_aug.index)
+qc_col1b = qc_col1b.where(dsdta_aug['GlobInc'].ge(400.0), 'Low GlobInc')
+qc_col1b = qc_col1b.where(dsdta_aug['EOutInv'].le(0.995 * dsdta_aug['EOutInv'].max()), 'Clipped power')
+qc_col1b = pd.Categorical(qc_col1b, categories=['Ok', 'Low GlobInc', 'Clipped power'])
+```
+
+```{python}
+qcdta1b = dsdta_aug.loc['Ok'==qc_col1b, :]
+qcdta1b
+```
+
+```{python}
+monthly_fits1b = ctpci.mr_fitconf_combine(
+    ti1b.model_runner(
+        gdf=qcdta1b.resample('MS')
+        , gdf_columns=qcdta1b.columns)
+    , key_names=['MonthBegin', 'Ref. Number'])
+monthly_fits1b.index = monthly_fits1b.index.droplevel(1)
+```
+
+```{python}
+#| label: fig-monthly-fits-bifi
+#| fig-cap: Monthly DNV Bifi (ASTM) fits
+(
+    p9.ggplot(
+        monthly_fits1b.reset_index()
+        , p9.aes(x='MonthBegin', y='fit', ymin='lwr', ymax='upr'))
+    + p9.geom_errorbar()
+    + p9.geom_point()
+)
+```
+
+```{python}
+# testing
+# {k: v for k, v in qcdta1b.loc[qcdta1b['GlobInc'].gt(700.), :].resample('D') if 3 < len(v)}
+```
+
+```{python}
+# @dataclass
+# class OLSFullModel:
+#     model_rc_spec: ctpci.ModelOLSRCSpec
+#     rccd: ctpci.RedundantCalcData
+#     model_obj: model_ols.Model
+#     fit: model_ols.ModelFit
+
+#     def autoplot(self, method=None, **kwargs) -> plt.Figure:
+#         if method is None or 'partregress_plot' == method:
+#             self.fit.plot()
+#         else:
+#             raise ValueError(f'Unknown method "{method}" in OLSFullModel.autoplot')
+
+
+# def full_model_extractor(
+#     model_rc_spec: ctpci.ModelOLSRCSpec
+#     , rccd: ctpci.RedundantCalcData
+# ) -> dict[str, Any]:
+#     model_obj = model_rc_spec.build_model(rccd.qcdta_computed)
+#     return OLSFullModel(
+#         model_rc_spec=model_rc_spec
+#         , rccd=rccd
+#         , model_obj=model_obj
+#         , fit=model_obj.fit())
+
+
+# ct_periods = {
+#     'Monthly': 'MS'
+#     , 'Weekly': 'W-MON'
+# }
+
+# @dataclass
+# class PeriodicCaptest:
+#     period_label: str
+#     olsfullmodels: dict[pd.Timestamp, OLSFullModel]
+
+#     def __init__(
+#         self
+#         , period_label: str
+#         , test_info: ctpci.OLSCapTestInfo
+#         , qcdta: pd.DataFrame
+#         , model_extractor: Callable[[ctpci.ModelOLSRCSpec, ctpci.RedundantCalcData], dict[str, Any]]
+#         , min_len: int = None
+#     ):
+#         if min_len is None:
+#             _min_len = len(test_info.model_rc_spec.reference_inputs) + 2
+#         else:
+#             _min_len = min_len
+#         self.period_label = period_label
+#         self.olsfullmodels = dict(
+#             test_info.model_runner(
+#                 gdf=(
+#                     (k, v)
+#                     for k, v in (
+#                         qcdta.resample(ct_periods[period_label]))
+#                     if _min_len <= len(v))
+#                 , gdf_columns=qcdta.columns
+#                 , model_extractor=model_extractor))
+
+# monthly_fits1c = PeriodicCaptest(
+#     'Monthly'
+#     , dict(
+#         ti1b.model_runner(
+#             gdf=qcdta1b.resample('MS')
+#             , gdf_columns=qcdta1b.columns
+#             , model_extractor=full_model_extractor)))
+monthly_fits1c = {
+    k[1]: v
+    for k, v in ctpci.PeriodicCaptest(
+        period_label="Monthly"
+        , test_info=ti1b
+        , qcdta_iterator=ctpci.onegroup(qcdta1b)
+        , qcdta_columns=set(qcdta1b.columns.to_list())
+        , model_extractor=ctpci.full_model_extractor)}
+# monthly_fits1c
+```
+
+```{python}
+list(monthly_fits1c.keys())
+```
+
+```{python}
+#| label: fig-april-partregress-bifi
+#| fig-cap: April DNV Bifi (ASTM) partial regression
+monthly_fits1c[pd.Timestamp('1990-04-01 00:00:00')].fit.plot()
+plt.show()
+```
+
+```{python}
+#| label: fig-may-partregress-bifi
+#| fig-cap: May DNV Bifi (ASTM) partial regression
+monthly_fits1c[pd.Timestamp('1990-05-01 00:00:00')].fit.plot()
+plt.show()
+```
+
+```{python}
+#| label: fig-may-influence-bifi
+#| fig-cap: May DNV Bifi (ASTM) influence plot
+monthly_fits1c[pd.Timestamp('1990-05-01 00:00:00')].fit.plot(method='influence_plot');
+plt.show()
+```
+
+## Bifacial weekly fits
+
+```{python}
+weekly_fits1c = {
+    k[1]: v
+    for k, v in ctpci.PeriodicCaptest(
+        period_label="Weekly"
+        , test_info=ti1b
+        , qcdta_iterator=ctpci.onegroup(qcdta1b)
+        , qcdta_columns=set(qcdta1b.columns.to_list())
+        , model_extractor=ctpci.full_model_extractor)}
+# weekly_fits1c
+```
+
+```{python}
+#| label: fig-april-partregress-bifi-weekly
+#| fig-cap: April DNV Bifi (ASTM) weekly partial regressions
+weekly_fits1c[pd.Timestamp('1990-04-02 00:00:00')].fit.plot();
+plt.show()
+```
+
+
+```{python}
+#| label: fig-may-partregress-bifi-weekly
+#| fig-cap: May DNV Bifi (ASTM) weekly partial regression
+weekly_fits1c[pd.Timestamp('1990-06-04 00:00:00')].fit.plot();
+plt.show()
+```
+
+```{python}
+#| label: fig-maywk5-influence-bifi-weekly
+#| fig-cap: May Week 5 DNV Bifi (ASTM) weekly partial regression
+weekly_fits1c[pd.Timestamp('1990-06-04 00:00:00')].fit.plot(method='influence_plot');
+plt.show()
+```
+
+
+```{python}
+qcdta1b_metrics = (
+    qcdta1b[
+        [
+            'GlobHor', 'DiffHor', 'BeamHor', 'T_Amb', 'WindVel', 'GlobInc'
+            , 'ShdLoss', 'IAMLoss', 'GlobEff', 'EArrNom', 'GIncLss'
+            , 'TempLss', 'ModQual', 'MisLoss', 'OhmLoss', 'EArrMPP', 'EArray'
+            , 'TArray', 'IL_Oper', 'IL_Pmin', 'IL_Pmax', 'IL_Vmin', 'EOutInv'
+            , 'E_Grid', 'UArray', 'InvLoss', 'IL_Vmax', 'GlobBak', 'GlobGnd'
+            , 'ReflLss', 'BkVFLss', 'DifSBak', 'BackShd', 'BmIncBk', 'BmSFBak'
+            , 'BeamBak', 'HSol', 'AzSol', 'AngProf', 'PhiAng']]
+    .resample('MS')
+    .mean()
+    .assign(
+        DiffuseFraction=lambda df: df['DiffHor'] / df['GlobHor']
+    )
+)
+qcdta1b_metrics
+```
+
+
+```{python}
+(
+    p9.ggplot(
+        pd.concat([monthly_fits1b, qcdta1b_metrics], axis=1)
+        , p9.aes(x='GlobInc', y='fit'))
+    + p9.geom_point()
+    + p9.geom_smooth(formula='y ~ x', method='lm')
+)
+```
+
+## Bifacial monthly fits with binned diffuse fraction
+
+
+```{python}
+qcdta1d_df = (
+    qcdta1b
+    .assign(
+        DiffuseFraction=lambda d: d['DiffHor'] / d['GlobHor']
+        , DiffuseFractionBin=lambda d: pd.cut(
+            d['DiffuseFraction']
+            , [n/10. for n in range(1, 10)]
+        ).astype(str)))
+monthly_fits1d = {
+    (bin, wk[1]): mdl
+    for bin, dta in (
+        qcdta1d_df
+        .groupby('DiffuseFractionBin'))
+    for wk, mdl in ctpci.PeriodicCaptest(
+        period_label="Monthly"
+        , test_info=ti1b
+        , qcdta_iterator=ctpci.onegroup(dta)
+        , qcdta_columns=set(dta.columns.to_list())
+        , model_extractor=ctpci.full_model_extractor)}
+
+```
+
+
+```{python}
+[k for k in monthly_fits1d.keys() if k[0] in ['(0.2, 0.3]']]
+```
+
+## Try out PeriodicCapTest
+
+```{python}
+qc_col1f = pd.Series('Ok', index=dsdta_aug.index)
+qc_col1f = qc_col1f.where(dsdta_aug['GlobInc'].ge(400.0), 'Low GlobInc')
+qc_col1f = qc_col1f.where(
+    dsdta_aug['EOutInv'].le(0.995 * dsdta_aug['EOutInv'].max())
+    , 'Clipped power')
+qc_col1f = pd.Categorical(
+    qc_col1f
+    , categories=['Ok', 'Low GlobInc', 'Clipped power'])
+
+qcdta1f = dsdta_aug.loc['Ok'==qc_col1f, list(ds_cols)]
+```
+
+
+```{python}
+
+print(ctpcs.object_to_yaml_str(
+    ctpss.build_pvsyst_olscti(
+        mrcspec=ti1.model_rc_spec  # mrcs1
+        , model='ASTM E2848'
+        , position='N/A')))
+```
+
+```{python}
+
+run_info_o05 = run_info.copy()
+run_info_o05['Offset'] = base_offset
+
+
+```
+
+
+
+```{python}
+
+
+qc_col1g = ctpss.mark_qc(df=dsdta_aug, method='Default')
+qcdta1g = ctpss.apply_qc(df=dsdta_aug, qc=qc_col1g)
+qcdta1g
+```
+
+```{python}
+# model_specs = {
+#     'ASTM E2848': mrcs1
+#     , 'ASTM E2848+Erear': mrcs1b
+# }
+
+csv_dtas = {
+    k: ctpio.read_pvsyst_hourly(
+        dta_dir / row['Csvfile']
+        , **row[['sep', 'dayfirst', 'date_format']])
+    for k, row in run_infos.iterrows()}
+
+# (Sim type, Model, Position, QC) : ((PRJ, sim case), model)
+ct_cases = pd.DataFrame(
+    columns=
+        ['Description', 'Sim. type', 'Model', 'Position', 'QC', 'PRJ', 'Variant']
+    , data = [
+        [
+            'Monofacial'
+            , 'Monofacial', 'ASTM E2848', 'N/A', 'Default'
+            , 'Test Bifi SAT_Project.PRJ', 'SAT Az0 (mono)']
+        , [
+            'Bifacial as if it was monofacial'
+            , 'Bifacial', 'ASTM E2848', 'N/A', 'Default'
+            , 'Test Bifi SAT_Project.PRJ', 'SAT Az0 (bifi)'
+        ]
+        , [
+            'Bifacial w/ ref. module'
+            , 'Bifacial', 'ASTM E2848', 'Ref. Module', 'Default'
+            , 'Test Bifi SAT_Project.PRJ', 'SAT Az0 (bifi)'
+        ]
+        , [
+            'Bifacial with ideal sensor underneath'
+            , 'Bifacial', 'ASTM E2848+Erear', 'Under', 'Default'
+            , 'Test Bifi SAT_Project.PRJ', 'SAT Az0 (bifi)'
+        ]
+        , [
+            'Bifacial with outboard sensor and default QC'
+            , 'Bifacial', 'ASTM E2848+Erear', 'Outboard', 'Default'
+            , 'Test Bifi SAT_Project.PRJ', 'SAT Az0 (bifi)'
+        ]
+        , [
+            'Bifacial with outboard sensor and E_rear QC'
+            , 'Bifacial', 'ASTM E2848+Erear', 'Outboard', 'E_rear<75'
+            , 'Test Bifi SAT_Project.PRJ', 'SAT Az0 (bifi)'
+        ]
+    ]
+    , index=pd.Index(list(range(1, 7)), name='Case No.') 
+)
+```
+
+```{python}
+qc_results = {
+    i: ctpss.get_qcresult(
+        run_info=(
+            run_infos
+            .loc[ctpss.make_case_run_info_key(sample_case=sample_case), :])
+        , dsdta=csv_dtas[ctpss.make_case_run_info_key(sample_case=sample_case)]
+        , qc_method=sample_case['QC']
+        , globbakunshd_rcs=None
+        , offset=base_offset)
+    for i, sample_case in ct_cases.iterrows()
+}
+```
+
+```{python}
+# def calc_case_periodic_ct_gen(
+#     sample_case: pd.Series
+#     , qc_results: dict[str, ctpss.QCResult]
+#     , period_label: str
+#     , ct_case_rcs: Optional[dict[ctpss.CaseTuple, RefConditionDef]] = None
+#     , model_extractor: Callable[
+#             [ctpci.ModelOLSRCSpec, ctpci.RedundantCalcData], ctpci.T] = ctpci.full_model_extractor
+# ) -> Iterable[tuple[Any, ctpci.T]]:
+#     sample_key = make_case_tuple(sample_case)
+#     run_key = sample_key[3]
+#     qc_result = qc_results[sample_key]
+#     if ct_case_rcs is None:
+#         mrcspec = model_specs[sample_case['Model']]
+#     else:
+#         mrcspec0 = model_specs[sample_case['Model']]
+#         rc = ct_case_rcs[sample_key]
+#         mrcspec = ctpci.ModelOLSRCSpec(
+#             model_type=mrcspec0.model_type
+#             , reference_spec=rc
+#             , output_col_name=mrcspec0.output_col_name
+#             , formula=mrcspec0.formula
+#             , coef_names=mrcspec0.coef_names.copy()
+#             , conf_level=0.95)
+#     olscti = build_pvsyst_olscti(
+#         run_info=qc_result.run_info
+#         , mrcspec=mrcspec
+#         , model=sample_case['Model']
+#         , position=sample_case['Position']
+#         , offset=qc_result.offset)
+#     periodic_fit_gen = ctpci.PeriodicCaptest(
+#         period_label=period_label
+#         , test_info=olscti
+#         , qcdta=qc_result.qcdta
+#         , model_extractor=model_extractor)
+#     return periodic_fit_gen
+
+
+# def calc_case_periodic_cts(
+#     sample_case: pd.Series
+#     , qc_results: dict[str, QCResult]
+#     , period_label: str
+#     , ct_case_rcs: Optional[dict[CaseTuple, RefConditionDef]] = None
+# ) -> pd.DataFrame:
+#     periodic_fit_gen = calc_case_periodic_ct_gen(
+#         sample_case=sample_case
+#         , qc_results=qc_results
+#         , period_label=period_label
+#         , ct_case_rcs=ct_case_rcs
+#         , model_extractor=ctpci.me_fitconf)
+#     return ctpci.mr_fitconf_combine(
+#         periodic_fit_gen
+#         , key_name=ctpci.ct_periods[period_label]["column_name"])
+
+# def calc_case_periodic_models(
+#     sample_case: pd.Series
+#     , qc_results: dict[str, QCResult]
+#     , period_label: str
+#     , ct_case_rcs: Optional[dict[CaseTuple, RefConditionDef]] = None
+# ) -> ctpci.OLSFullModel:
+#     periodic_fit_gen = calc_case_periodic_ct_gen(
+#         sample_case=sample_case
+#         , qc_results=qc_results
+#         , period_label=period_label
+#         , ct_case_rcs=ct_case_rcs
+#         , model_extractor=ctpci.full_model_extractor)
+#     return {
+#         k: mdl
+#         for k, mdl in periodic_fit_gen}
+
+# def model_spec_per_sample_case(
+#     sample_case_key: int
+#     , ct_cases: pd.DataFrame
+#     , rc_calc: str
+#     , run_infos: pd.DataFrame
+#     , conf_level: float = 0.95
+# ) -> ctpci.ModelOLSRCSpec:
+#     sample_case = ct_cases.loc[sample_case_key, :]
+#     run_info_key = tuple(sample_case[['PRJ', 'Variant']])
+#     run_info = run_infos.loc[run_info_key, :]
+#     model_translation = {
+#         'ASTM E2848': 'ASTM_E2848'
+#         , 'ASTM E2848+Erear': 'DNV_Bifi_ASTM'
+#     }
+#     if 'ASTM E2848' == sample_case['Model']:
+#         default_rc = {'E': rc_calc}
+#     else:
+#         default_rc = {'E_front': rc_calc, 'E_rear': rc_calc}
+#     return ctpci.ModelOLSRCSpec(
+#         reference_spec=ctpss.EquivalentPositionReferenceCondition(
+#             default_rc=default_rc
+#             , e_cell_rc=rc_calc
+#             , e_cell_colname='GlobCell'
+#             , e_globbakunshd_colname='GlobBakUnshd'
+#             , e_globbakunshd_rc=rc_calc
+#             , bifaciality=run_info['Bifaciality']
+#             , model=sample_case['Model']
+#             , bifi_position=sample_case['Position'])
+#         , conf_level=conf_level
+#         , **ctpci.default_model_info[
+#             model_translation[sample_case['Model']]])
+
+# model_spec_per_sample_case(
+#     sample_case_key=6
+#     , ct_cases=ct_cases
+#     , rc_calc='mean'
+#     , run_infos=run_infos
+# )
+```
+
+```{python}
+ct_case_model_specs = {
+    ct_case_key: ctpss.model_spec_per_sample_case(
+        sample_case=sample_case
+        , rc_calc='mean'
+        , run_info=(
+            run_infos
+            .loc[ctpss.make_case_run_info_key(sample_case), :])
+        , globbakunshd_rc='mean'
+        , globbakunshd_rcs=None
+        , conf_level=0.95)
+    for ct_case_key, sample_case in ct_cases.iterrows()}
+```
+
+```{python}
+sample_case_key = 6
+sample_case = ct_cases.loc[sample_case_key, :]
+ctpss.calc_case_periodic_cts(
+    sample_case=sample_case
+    , period_label="Monthly"
+    , model_spec=ct_case_model_specs[sample_case_key]
+    , qc_result=qc_results[sample_case_key])
+
+```
+
+```{mermaid}
+sequenceDiagram
+    main ->> calc_case_periodic_cts: (sample_case, period_label,<br/> model_spec, qc_result)
+    calc_case_periodic_cts ->> calc_case_periodic_ct_gen:(sample_case, qc_result, period_label, model_spec,<br/> ct_case_rcs, model_extractor=captest_info.me_fitconf)
+    calc_case_periodic_ct_gen ->> calc_case_periodic_cts: periodic_fit_gen
+    calc_case_periodic_cts ->> mr_fitconf_combine: (periodic_fit_gen, key_name)
+
+    mr_fitconf_combine ->> OLSCapTestInfo_gen: next()
+
+    mr_fitconf_combine ->> calc_case_periodic_cts: DataFrame
+    calc_case_periodic_cts ->> main: DataFrame
+```
+
+```{mermaid}
+flowchart
+    dsdta --> augment_sim_data(augment_sim_data)
+    augment_sim_data -- dsdta_aug --> PeriodicCapTest_gen
+    subgraph PeriodicCapTest
+        PeriodicCapTest_gen -- interval_qcdta --> qcfunc
+        subgraph OLSCapTestInfo_modelrunner
+            qcfunc -- qcdta --> OLSCapTestInfo_applyme
+            OLSCapTestInfo_applyme -- RedundantCalcData --> me_fitconf
+        end
+    end
+    me_fitconf(me_fitconf) -- periodic_fit_gen  --> mr_fitconf_combine(mr_fitconf_combine)
+```
+
+### Reference Conditional Plot (coplot)
+
+If we want to review the impact of a single variable on the power output in a controlled manner, we can set all of the other variables to their reference values (constant) and leave the measured values of the variable of interest alone, and use the fitted model to predict the power output and add the model residuals to that predicted power, and then plot this "corrected" power versus the single variable of interest. We can then overlay a vertical line for the reference value and a horizontal line for the predicted power corresponding to the input reference conditions to put the observed data in context with the reference conditions.
+
+See e.g. https://epurdom.github.io/Stat131A/book/multiple-regression.html#the-nature-of-the-relationship where the data are stratified into multiple plots rather than correcting to reference conditions, but the idea is the same.
+
+```{python}
+fm = ctpss.calc_case_periodic_models(
+    sample_case=ct_cases.loc[1, :]
+    , period_label="Monthly"
+    , model_spec=ct_case_model_specs[1]
+    , qc_result=qc_results[1]
+)[(True, pd.Timestamp('1990-07-01'))]
+```
+
+
+```{python}
+def marginal_df(fm: ctpci.OLSFullModel, spec_var: str) -> pd.DataFrame:
+    f = fm.fit.fit
+    rcdf = pd.DataFrame(
+        fm.reference_inputs
+        , index=f.resid.index)
+    rcdf[spec_var] = fm.rccd.qcdta_computed[spec_var]
+    rcdf[fm.model_obj.output_name] = f.predict(rcdf) + f.resid
+    return pd.DataFrame(
+        {
+            'x': rcdf[spec_var]
+            , 'y': rcdf[fm.model_obj.output_name]})
+
+def vdta(fm: ctpci.OLSFullModel) -> pd.DataFrame:
+    return pd.concat(
+        [
+            marginal_df(fm, spec_var=spec_var)
+            for spec_var in fm.model_obj.input_names]
+        , keys=[
+            spec_var
+            for spec_var in fm.model_obj.input_names]
+        , names=['spec_var'])
+
+def vplot(fm: ctpci.OLSFullModel, nrow: Optional[int] = None, ylim: Optional[tuple[float, float]] = None) -> plt.Figure:
+    refdf = pd.DataFrame(
+        fm.reference_inputs
+        , index=['value'])
+    target = fm.fit.predict(new_data=refdf)
+    target['neg'] = -np.Inf
+    target['pos'] = np.Inf
+    return (
+        p9.ggplot(
+            vdta(fm).reset_index()
+            , p9.aes(x='x', y='y'))
+        + p9.geom_rect(
+            data=target
+            , mapping=p9.aes(ymin='lwr', ymax='upr', xmin='neg', xmax='pos')
+            , fill='green'
+            , alpha=0.1
+            , inherit_aes=False)
+        + p9.geom_point(size=1, alpha=0.2)
+        + p9.geom_vline(
+            data=refdf.T.rename_axis('spec_var').reset_index()
+            , mapping=p9.aes(xintercept='value', group='spec_var')
+            , color='blue')
+        + p9.geom_hline(
+            data=target
+            , mapping=p9.aes(yintercept='fit')
+            , color='green')
+        + p9.facet_wrap(
+            '~ spec_var'
+            , nrow=nrow
+            , scales='free_x')
+        + p9.labs(
+            x='Value'
+            , y=fm.model_rc_spec.output_col_name)
+        + p9.coord_cartesian(
+            ylim=ylim
+        ))
+
+vplot(fm)
+```
+
+### Monthly capacity tests, predefined ref conditions
+
+```{mermaid}
+graph
+    ct_cases --> get_qcresult(get_qcresult)
+    csv_dtas --> get_qcresult
+    run_infos --> get_qcresult
+    base_offset --> get_qcresult
+    get_qcresult --> qc_results
+    qc_results --> calc_case_periodic_ct_gen(calc_case_periodic_ct_gen)
+    calc_case_periodic_ct_gen --> calc_case_periodic_cts(calc_case_periodic_cts)
+    calc_case_periodic_cts --> all_fits
+
+```
+
+```{python}
+five_results = {
+    (k, tm[1]): full_model
+    for k, sample_case in ct_cases.iterrows()
+    if 6 != k
+    for tm, full_model in ctpss.calc_case_periodic_ct_gen(
+        sample_case=sample_case
+        , qc_result=qc_results[k]
+        , model_spec=ct_case_model_specs[k]
+        , period_label='Monthly'
+        , model_extractor=ctpci.full_model_extractor)
+    }
+five_results
+
+```
+
+```{python}
+five_fits = pd.concat(
+    {
+        k: ctpci.me_fitconf(
+            model_rc_spec=v.model_rc_spec
+            , rccd=v.rccd
+            , rcci=v.rcci
+        )
+        for k, v in five_results.items()}
+    , names=['Case No.', 'MonthBegin'])
+five_fits.index = five_fits.index.droplevel(2)
+five_fits
+```
+
+```{python}
+override_rcs = {
+    (True, k[1]): x.reference_inputs
+    for k, x in five_results.items()
+    if 5 == k[0]
+}
+override_rcs
+```
+
+```{python}
+sample_case_key = 6
+sample_case = ct_cases.loc[sample_case_key, :]
+sixth_model_spec = ctpss.model_spec_per_sample_case(
+        sample_case=sample_case
+        , rc_calc='mean'
+        , run_info=(
+            run_infos
+            .loc[ctpss.make_case_run_info_key(sample_case), :])
+        , globbakunshd_rc='mean'
+        , globbakunshd_rcs=None
+        , conf_level=0.95
+        , override_rcs=override_rcs)
+sixth_fit = ctpss.calc_case_periodic_cts(
+    sample_case=sample_case
+    , qc_result=qc_results[sample_case_key]
+    , model_spec=ct_case_model_specs[sample_case_key]
+    , period_label='Monthly')
+sixth_fit.index = sixth_fit.index.droplevel(1)
+sixth_fit = pd.concat([sixth_fit], keys=[6], names=['Case No.'])
+sixth_fit
+```
+
+```{python}
+all_fits = (
+    pd.concat([five_fits, sixth_fit])
+    .join(ct_cases[['Description']])
+)
+all_fits
+```
+
+```{python}
+dodge = 16
+(
+    p9.ggplot(
+        all_fits.reset_index()
+        , p9.aes(
+            x='MonthBegin'
+            , y='fit'
+            , ymin='lwr'
+            , ymax='upr'
+            , color='Description'))
+    + p9.geom_point(size=0.5, position=p9.position_dodge(width=dodge))
+    + p9.geom_errorbar(position=p9.position_dodge(width=dodge))
+    + p9.coord_cartesian(ylim=[1000000, 2000000])
+    + p9.scale_x_date(breaks=date_breaks('2 months'))
+    + p9.theme(
+        axis_text_x=p9.element_text(
+            rotation=45, va='top', ha='right'
+        )
+    )
+)
+```
+
+```{python}
+(
+    p9.ggplot(
+        qc_results[1].qcdta
+        , p9.aes(x='GlobInc', y='GlobEff'))
+    + p9.geom_point(size=0.5, alpha=0.2)
+)
+```
+
+```{python}
+smf.ols(
+    formula='GlobEff ~ GlobInc -1'
+    , data=qc_results[2].qcdta
+).fit().summary()
+```
+
+### Reference condition equivalency by model/configuration, same all year
+
+```{python}
+# def calc_x_GlobEff(df: pd.DataFrame, x: str, ref_globeff: float) -> float:
+#     fit_x = smf.ols(formula=f'{x} ~ GlobEff', data=df).fit()
+#     return fit_x.predict({'GlobEff': ref_globeff})[0]
+
+
+# def calc_x_GlobBak(df: pd.DataFrame, x: str, ref_globbak: float) -> float:
+#     fit_x = smf.ols(formula=f'{x} ~ GlobBak', data=df).fit()
+#     return fit_x.predict({'GlobBak': ref_globbak})[0]
+
+
+# def calc_equivalent_pvsyst_rc(
+#     refmod_rc: dict[str, float]
+#     , Model: str
+#     , Position: str
+#     , qc_result: QCResult
+#     , run_info: pd.Series
+#     , rear_contribution: float = 75.0
+# ) -> dict[str, float]:
+#     result = refmod_rc.copy()
+#     if 'ASTM E2848' == Model:
+#         if 'N/A' == Position:
+#             result['E'] = calc_x_GlobEff(
+#                 df=qc_result.qcdta
+#                 , x='GlobInc'
+#                 , ref_globeff=refmod_rc['E'])
+#         elif 'Ref. Module' == Position:
+#             pass
+#         else:
+#             raise ValueError(
+#                 f'unexpected Position "{Position}" '
+#                 'in calc_equivalent_pvsyst_rc')
+#     elif 'ASTM E2848+Erear' == Model:
+#         del(result['E'])
+#         if 'Under' == Position:
+#             result['E_front'] = calc_x_GlobEff(
+#                 df=qc_result.qcdta
+#                 , x='GlobInc'
+#                 , ref_globeff=refmod_rc['E'] - rear_contribution)
+#             result['E_rear'] = (
+#                 rear_contribution
+#                 / run_info['Bifaciality']
+#                 / (1 - run_info['StrucShd']))
+#         elif 'Outboard' == Position:
+#             result['E_front'] = calc_x_GlobEff(
+#                 df=qc_result.qcdta
+#                 , x='GlobInc'
+#                 , ref_globeff=refmod_rc['E'] - rear_contribution)
+#             globbak_ref = (
+#                 rear_contribution
+#                 / run_info['Bifaciality'])
+#             result['E_rear'] = calc_x_GlobBak(
+#                 df=qc_result.qcdta
+#                 , x='E_rear'
+#                 , ref_globbak=globbak_ref)
+            
+#     return result
+
+
+# calc_equivalent_pvsyst_rc(
+#     refmod_rc={'E': 680, 'T_a': 20, 'v': 3.5}
+#     , Model='ASTM E2848+Erear'
+#     , Position='Under'
+#     , qc_result=qc_results[
+#         (
+#             'ASTM E2848+Erear', 'Outboard', 'E_rear<75'
+#             , ('Test Bifi SAT_Project.PRJ', 'SAT Az0 (bifi)'))]
+#     , run_info=run_infos.loc[('Test Bifi SAT_Project.PRJ', 'SAT Az0 (bifi)')]
+#     , rear_contribution=75.0
+#     )
+```
+
+
+
+```{python}
+# ct_case_rcs = {
+#     i: calc_equivalent_pvsyst_rc(
+#         refmod_rc={'E': 680, 'T_a': 20, 'v': 3.5}
+#         , Model=k[0]
+#         , Position=k[1]
+#         , qc_result=qc_results[
+#             (
+#                 'ASTM E2848+Erear', 'Outboard', 'E_rear<75'
+#                 , ('Test Bifi SAT_Project.PRJ', 'SAT Az0 (bifi)'))]
+#         , run_info=run_infos.loc[('Test Bifi SAT_Project.PRJ', 'SAT Az0 (bifi)')]
+#         , rear_contribution=75.0)
+#     for i, sample_case in ct_cases.iterrows()}
+# ct_case_rcs
+```
+
+```{python}
+# rc_names = ['E', 'E_front', 'E_rear', 'T_a', 'v']
+# def get_case_rc(
+#     variable: str
+#     , row: pd.Series
+#     , ct_case_rcs: dict
+# ) -> Optional[float]:
+#     k = (
+#         row['Model'], row['Position'], row['QC']
+#         , tuple(row[['PRJ', 'Variant']].values))
+#     if k not in ct_case_rcs:
+#         raise ValueError(f'key "{k}" not found in ct_case_rcs')
+#     rc = ct_case_rcs[k]
+#     if variable not in rc:
+#         return pd.NA
+#     return rc[variable]
+
+# ct_case_rcs_df = pd.DataFrame(
+#     [
+#         (
+#             [row['Description']]
+#             + [
+#                 get_case_rc(variable=rcn, row=row, ct_case_rcs=ct_case_rcs)
+#                 for rcn in rc_names]
+#         )
+#         for k, row in ct_cases.iterrows()]
+#     , index=ct_cases.index
+#     , columns=['Description'] + rc_names)
+# ct_case_rcs_df
+```
+
+### Reference condition equivalency, by month/model/configuration
+
+```{python}
+ref_case = ct_cases.loc[3, :]
+globbakunshd_rcs = {
+    month_begin: ctpss.get_qcresult(
+        run_info=run_infos.loc[ctpss.make_case_run_info_key(ref_case), :]
+        , dsdta=df
+        , qc_method=ref_case['QC']
+        , offset=base_offset
+    ).qcdta['GlobBakUnshd'].mean()
+    for month_begin, df in dsdta_aug.resample('MS')
+}
+globbakunshd_rcs
+```
+
+```{python}
+all_fits_eq_rc = (
+    pd.concat(
+        [
+            ctpss.calc_case_periodic_cts(
+                sample_case=sample_case
+                , qc_result=ctpss.get_qcresult(
+                    run_info=(
+                        run_infos
+                        .loc[ctpss.make_case_run_info_key(sample_case), :])
+                    , dsdta=dsdta_aug
+                    , qc_method=sample_case['QC']
+                    , globbakunshd_rcs=globbakunshd_rcs
+                    , offset=base_offset)
+                , period_label='Monthly'
+                , model_spec=ct_case_model_specs[k])
+            for k, sample_case in ct_cases.iterrows()]
+        , keys=ct_cases['Description']
+    )
+)
+all_fits_eq_rc
+```
+
+
+```{python}
+(
+    p9.ggplot(
+        all_fits_eq_rc.reset_index()
+        , p9.aes(
+            x='MonthBegin'
+            , y='fit'
+            , ymin='lwr'
+            , ymax='upr'
+            , color='Description'))
+    #+ p9.geom_bar(stat='identity', position='dodge')
+    + p9.geom_point(size=0.5, position=p9.position_dodge(width=dodge))
+    + p9.geom_errorbar(position=p9.position_dodge(width=dodge))
+    + p9.coord_cartesian(ylim=[1000000, 2000000])
+    + p9.scale_x_date(breaks=date_breaks('2 months'))
+    + p9.theme(
+        axis_text_x=p9.element_text(
+            rotation=45, va='top', ha='right'
+        )
+    )
+)
+```
+
+## Diagnostics
+
+```{python}
+eq_rc_monthly_models = {
+    k: ctpss.calc_case_periodic_models(
+                sample_case=sample_case
+                , qc_result=ctpss.get_qcresult(
+                    run_info=(
+                        run_infos
+                        .loc[ctpss.make_case_run_info_key(sample_case), :])
+                    , dsdta=dsdta_aug
+                    , qc_method=sample_case['QC']
+                    , offset=base_offset)
+                , period_label='Monthly'
+                , model_spec=ct_case_model_specs[k])
+            for k, sample_case in ct_cases.iterrows()}
+#eq_rc_monthly_models
+```
+
+
+```{python}
+sample_month_begin = pd.Timestamp('1990-05-01 00:00:00')
+for k, pfm in eq_rc_monthly_models.items():
+    fig = (
+        vplot(
+            pfm[sample_month_begin]
+            , nrow=1
+            , ylim=(800000, 2400000))
+        + p9.labs(
+            title=ct_cases.loc[k, 'Description']))
+    fig.show()
+```
+
+
+```{python}
+eq_rc_reference_inputs = pd.concat(
+    [
+        pd.Series(ofm.reference_inputs, name=(k, tm))
+        for k, v in eq_rc_monthly_models.items()
+        for tm, ofm in v.items()]
+    , axis=1
+).T
+eq_rc_reference_inputs.index.names=[ct_cases.index.name, "MonthBegin"]
+eq_rc_reference_inputs
+```
+
+
+```{python}
+eq_rc_reference_inputs.loc[pd.IndexSlice[:, pd.Timestamp('1990-05-01 00:00:00')], :]
+```
+
+
+```{mermaid}
+flowchart
+    subgraph self
+        e_globbakunshd_colname
+        e_globbakunshd_rc
+        e_cell_colname
+        e_cell_rc
+        bifaciality
+    end
+
+    subgraph calc_globbak_globbakunshd
+        ols_globbak(ols)
+        predict_globbak(predict)
+    end
+    qcdta_redundant --> ols_globbak
+    globbak_col["'GlobBak'"] --> ols_globbak
+    e_globbakunshd_colname --> ols_globbak
+    e_globbakunshd_ref --> predict_globbak
+    ols_globbak --> predict_globbak
+    predict_globbak --> e_globbak_ref
+
+    e_globbakunshd_rc -- mean --> ref_calculation_agg_gbu(ref_calculation)
+    e_globbakunshd_colname --> ref_calculation_agg_gbu
+    qcdta_redundant --> ref_calculation_agg_gbu
+    ref_calculation_agg_gbu --> e_globbakunshd_ref
+
+    e_cell_rc -- mean --> ref_calculation_agg_cell(ref_calculation)
+    e_cell_colname --> ref_calculation_agg_cell
+    qcdta_redundant --> ref_calculation_agg_cell
+    ref_calculation_agg_cell --> e_cell_ref
+    
+    e_cell_ref --> cell_bifaciality_eqn(cell_bifaciality_eqn)
+    bifaciality --> cell_bifaciality_eqn
+    e_globbak_ref --> cell_bifaciality_eqn
+    cell_bifaciality_eqn --> e_globeff_ref
+
+
+    subgraph calc_globinc_globeff
+        ols_globinc(ols)
+        predict_globinc(predict)
+    end
+    qcdta_redundant --> ols_globinc
+    globeff_col["'GlobEff'"] --> ols_globinc
+    e_globinc_col["'GlobInc'"] --> ols_globinc
+    e_globeff_ref --> predict_globinc
+    ols_globinc --> predict_globinc
+    predict_globinc --> e_front_ref
+
+    subgraph calc_erearoutboard_globbakunshd
+        ols_erearoutboard(ols)
+        predict_erearoutboard(predict)
+    end
+    qcdta_redundant --> ols_erearoutboard
+    e_globbakunshd_colname --> ols_erearoutboard
+    erearoutboard_col["'E_rear_outboard'"] --> ols_erearoutboard
+    e_globbakunshd_ref --> predict_erearoutboard
+    ols_erearoutboard --> predict_erearoutboard
+    predict_erearoutboard --> e_rear_outboard_ref
+
+```
+
+
+
+```{python}
+rd = (
+    eq_rc_monthly_models[6][pd.Timestamp('1990-05-01 00:00:00')]
+    .rccd
+    .qcdta_redundant)
+cd = (
+    eq_rc_monthly_models[6][pd.Timestamp('1990-05-01 00:00:00')]
+    .rccd
+    .qcdta_computed)
+smf.ols('GlobBak ~ GlobBakUnshd', data=rd).fit().summary()
+# for k, pfm in eq_rc_monthly_models.items():
+#     fig = (
+#         vplot(
+#             pfm[sample_month_begin]
+#             , nrow=1
+#             , ylim=(800000, 2400000))
+#         + p9.labs(
+#             title=ct_cases.loc[k, 'Description']))
+#     fig.show()
+```
