@@ -1,0 +1,591 @@
+---
+title: "Bifacial ASTM2848 Capacity Testing with Outboard Sensors"
+author: "Jeff Newmiller"
+date: 2024-06-11
+format:
+  revealjs:
+    embed-resources: true
+    width: 1920
+    height: 1080
+    #mainfont: Daytona
+    logo: images/DNV_logo_RGB.png
+    theme: simple
+    mermaid: 
+      theme: neutral
+execute: 
+  echo: false
+bibliography: ../pvsc52/BifiOutboardPVSC52.bib
+csl: ../pvsc52/ieee-w-url.csl
+---
+
+```{python}
+#|  execute:
+#|    error: false
+#|    warning: false
+import pathlib
+import collections
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import bifi_outboard as bo
+import bifi_outboard.captest_prototype.captest_info as ctpci
+import bifi_outboard.captest_prototype.sim_study as ctpss
+import plotnine as p9
+```
+
+
+```{python}
+dta_dir = pathlib.Path('..') / 'data'
+shts = pd.read_excel(dta_dir / 'Inventory.xlsx', sheet_name=None, header=0)
+shts['Sites'] = shts['Sites'].set_index('SiteLabel')
+shts['Systems'] = shts['Systems'].set_index('SystemLabel')
+shts['PVsyst Runs'] = shts['PVsyst Runs'].set_index(['prj_file', 'variant'])
+```
+
+```{python}
+run_info = (
+    shts['PVsyst Runs']
+    .loc[('Test Bifi SAT_Project.PRJ', 'SAT Az0 (bifi)'), :])
+bdta = bo.pvsystcsv.read_pvsyst_csv(
+    dta_dir.joinpath(*run_info['Csvfile'].split('\\')) # os-independent path
+    , sep=','
+    , date_format='%m/%d/%y %H:%M')
+sys_info = shts['Systems'].loc[run_info['SystemLabel'], :]
+site_info = shts['Sites'].loc[run_info['SiteLabel'], :]
+```
+
+```{python}
+cases = pd.DataFrame(
+    {'offset': [-100, 1]}
+    , index = pd.Index(['Under', 'Adjacent'], name='Position'))
+```
+
+```{python}
+def augment_E_rear(er_df: pd.DataFrame) -> pd.DataFrame:
+  return (
+    er_df
+    .assign(
+        GlobBakUnshd=lambda df: df['GlobBak'] + df['BackShd']
+        , DiffuseFraction=lambda df: df['DiffHor'] / df['GlobHor']
+        , Tilt=lambda df: np.abs(df['PhiAng'])
+    )
+  )
+
+
+def assign_E_rear(
+  bdta: pd.DataFrame
+  , height: float
+  , offset: float
+  , gcr: float
+  , near_albedo: float
+) -> pd.DataFrame:
+  edta = bo.outboard_sat.calc_E_rear(
+    height=height
+    , offset=offset
+    , AzSol=bdta['AzSol']
+    , HSol=bdta['HSol']
+    , PhiAng=bdta['PhiAng']
+    , GlobHor=bdta['GlobHor']
+    , GlobGnd=bdta['GlobGnd']
+    , BkVFLss=bdta['BkVFLss']
+    , DifSBak=bdta['DifSBak']
+    , BmIncBk=bdta['BmIncBk']
+    , GCR=gcr
+    , NearAlbedo=near_albedo)
+  result = bdta.copy()
+  result[edta.columns] = edta
+  return result
+```
+
+```{python}
+bdta_aug = pd.concat(
+    [
+      augment_E_rear(
+        assign_E_rear(
+          bdta=bdta
+          , height=run_info['Height']
+          , offset=off
+          , gcr=sys_info['GCR']
+          , near_albedo=run_info['NearAlbedo']))
+      for off in cases['offset']]
+    , keys=cases.index
+    , names=[cases.index.name, 'Timestamp'])
+```
+
+
+## Outline
+
+- Problem
+- Context
+- Theory
+- Simulations
+- Conclusions
+
+## Problem
+
+- Capacity testing of bifacial photovoltaic power systems needs measurements of input irradiance on the rear of the array to avoid attributing rear side irradiance performance contribution to the equipment.
+- Rear side irradiance varies across the back of a PV array (x and y) as well as perpendicular to the rear laminate surface (z) and this 3d shade pattern varies independently from front side irradiance as time (t) progresses.
+- Questions:
+  + What irradiance boundary is appropriate for system power capacity testing?
+  + Where should we place an irradiance sensor to obtain readings representative of that rear side boundary?
+  + Will this measurement location be representative during the short time intervals used for capacity testing?
+
+## Morphing Shade
+
+::::{.columns}
+
+:::{.column width="50%"}
+
+::: {#fig-mcintosh layout-ncol=2}
+
+![East $60^\circ$ roll](images/mcintosh_east60.png){#fig-mcintosh-east60}
+
+![West $36^\circ$ roll](images/mcintosh_west36.png){#fig-mcintosh-west36}
+
+Rear irradiance pattern varying throughout the day @mcintoshEffectNonuniformIllumination2019
+:::
+
+:::
+
+:::{.column width="50%"}
+
+- Per McIntosh 2019 @mcintoshEffectNonuniformIllumination2019 the rear-side shade patterns for a horizontal single-axis-tracker at the laminate vary throughout the day 
+- In addition, a sensor placed in the plane of the laminate between two modules typically has partial shading from module frames
+- Depending how close or far the nearest posts are, the sensor may be affected by them more or less than the spatial average of the rear irradiance.
+
+:::
+::::
+
+## Context : ASTM-E2848/E2939 Strategy
+
+::::{.columns}
+
+:::{.column width="50%"}
+
+```{mermaid}
+%%| label: fig-astm-strategy-simple
+%%| fig-cap: ASTM E2848 Flow of information
+%%| fig_width: 10
+%%| fig-height: 10
+flowchart TB
+  wthrdb[Weather<br>Database] --> modeling(Modeling) --> modelregress(Model<br>Regression) --> modelpredict(Modeled<br>Capacity<br>Prediction) -- "Expected<br>Capacity" --> compare[Comparison]
+  field[PV<br>Plant] --> Sensors(Sensors) --> ref(Select<br>Reference<br>Conditions) --> modelpredict
+  Sensors --> measregress(Measured<br>Regression) --> measpredict(Measured<br>Capacity<br>Prediction) -- "Measured<br>Capacity" --> compare
+  ref --> measpredict
+```
+
+:::
+:::{.column width="50%"}
+
+- Two multi-variable regressions
+  + Field data regression
+  + Modeled data regression
+- Supports proprietary models
+  + Or models that do not allow injection of POA
+- Reference conditions form common basis for comparison
+  + Prediction of measured capacity and target capacity using regression fits
+  + The common input is the reference conditions... the simulation weather can be different than the measured weather
+
+:::
+::::
+
+## Context : Regression against derived variable POA
+
+```{mermaid}
+flowchart LR
+  subgraph System under test
+    direction LR
+    GHImeas[GHI] --> transpmeas("Front<br>Transposition") --> POAmeas[POA] --> irrmodelsfield("Shade/<br>Reflection/<br>Spectrum") --> effpoafield[EffPOA] --> fielddcconversion(DC<br>Conversion) --> fielddcpwr[DC<br>Power] --> invfield(AC<br>Conversion) --> measacpwr[AC<br>Power]
+    measWS[Wind<br>Speed] & measTa[Ambient<br>Temp] --> fieldthermal(Thermal) --> measTc(Cell<br>Temp) --> fielddcconversion
+    style POAmeas fill:yellow
+    style measWS fill:yellow
+    style measTa fill:yellow
+    style measacpwr fill:yellow
+  end
+  subgraph Modeled system
+    direction LR
+    GHIdb[Typ GHI] --> transpcalc(Front<br>Transposition) --> POAcalc[Typ<br>POA] --> irrmodelscalc("Shade/<br>Reflection/<br>Spectrum") --> effpoacalc[Typ<br>EffPOA] --> calcdcconversion(DC Conversion) --> calcdcpwr[DC<br>Power] --> invcalc(AC<br>Conversion) --> calcacpwr[AC<br>Power]
+    dbWS[Typ<br>Wind<br>Speed] & dbTa[Typ<br>Ambient<br>Temp] --> calcthermal(Thermal) --> calcTc(Cell<br>Temp) --> calcdcconversion
+    style POAcalc fill:yellow
+    style dbWS fill:yellow
+    style dbTa fill:yellow
+    style calcacpwr fill:yellow
+  end
+```
+
+- Existing ASTM E2848 Regression equation: : $P = E \cdot \left( a_1 + a_2 \cdot E + a_3 \cdot T_a + a_4 \cdot v \right)$
+    - $E$ is (front-side) plane-of-array irradiance, not in diffuse shade
+    - $T_a$ is ambient temperature, $v$ is wind speed
+- Yellow variables in diagram are used to fit the regression models
+
+## System boundaries and insensitivity
+
+::::{.columns}
+:::{.column width="50%"}
+
+![Possible irradiance boundaries](diagrams/boundaries.png){#fig-boundaries}
+
+:::
+:::{.column width="50%"}
+
+- ASTM specifies ambient temperature with wind speed, rather than cell temperature
+  + If module temperature were used and the energy model failed to account for obstructed cooling, then a hot module would simply be expected to produce less power and the regression prediction would "correct" for the hot array
+  + If a specified reference ambient temperature is used, then failure to model the module temperature properly will affect the modeled power and thus possibly affect the outcome of the test
+- If the total irradiance is measured using a bifacial reference module, the test will be insensitive to changes in module bifaciality or rear structural shading.
+  + Structural members placed behind the modules would not affect the outcome of the test if reference modules are used.
+
+:::
+::::
+
+## Concept : Outboard rear pyranometer
+
+::::{.columns}
+:::{.column width="50%"}
+
+![Downward facing sensor sees unshaded ground and shaded ground](diagrams/down_view_longarray.png){#fig-down-view-longarray width="100%"}
+
+:::
+:::{.column width="50%"}
+
+- Front-side POA sensors have traditionally been placed adjacent to the array
+  + Along top edge for fixed arrays
+  + Along tracker axis for SAT
+- Why not install a sensor facing in the opposite direction as the front sensor as an "unobstructed proxy" sensor?
+  + Such a placement has an inherent measurement bias... but as long as it is linearly correlated with the spatial-average $\mathtt{GlobBak}$ value that is easy to calculate but difficult to measure, then we should be able to predict P from the outboard sensor equally as well as the $\mathtt{GlobBak}$ value.
+    + This correlation is demonstrated under certain conditions later in this presentation.
+
+:::
+::::
+
+
+## Outboard Measurement Strategy
+
+::::{.columns}
+:::{.column width="50%"}
+
+```{mermaid}
+flowchart LR
+  subgraph System under test
+    direction LR
+    GHImeas[GHI] --> transpmeas(Front<br>Transposition) --> POAmeas[POA] --> irrmodelsfield(Shade/<br>Reflection/<br>Spectrum) --> effpoafield[EffPOA] --> fielddcconversion(DC<br>Conversion) --> fielddcpwr[DC<br>Power] --> invfield(AC<br>Conversion) --> measacpwr[AC<br>Power]
+    GHImeas --> fieldreartransp(Rear<br>Transposition) --> fieldrpoaavg[RPOA<br>avg] --> fieldoutboardposition(Outboard<br>Position) --> fieldrpoaout[RPOA<br>outboard]
+    fieldrpoaavg --> fieldbifaciality(Bifaciality) --> fielddcconversion
+    measWS[Wind<br>Speed] & measTa[Ambient<br>Temp] --> fieldthermal(Thermal) --> measTc(Cell<br>Temp) --> fielddcconversion
+    style POAmeas fill:yellow
+    style measWS fill:yellow
+    style measTa fill:yellow
+    style measacpwr fill:yellow
+    style fieldrpoaavg fill:tomato
+    style fieldrpoaout fill:yellow 
+  end
+  subgraph Modeled system
+    direction LR
+    GHIdb[Typ<br>GHI] --> transpcalc(Front<br>Transposition) --> POAcalc[Typ<br>POA] --> irrmodelscalc(Shade/<br>Reflection/<br>Spectrum) --> effpoacalc[Typ<br>EffPOA] --> calcdcconversion(DC<br>Conversion) --> calcdcpwr[DC<br>Power] --> invcalc(AC<br>Conversion) --> calcacpwr[AC<br>Power]
+    GHIdb --> calcreartransp(Rear<br>Transposition) --> calcrpoaavg[RPOA<br>avg] --> calcoutboardposition(Outboard<br>Position) --> calcrpoaout[RPOA<br>outboard]
+    dbWS[Typ<br>Wind<br>Speed] & dbTa[Typ<br>Ambient<br>Temp] --> calcthermal(Thermal) --> calcTc(Cell<br>Temp) --> calcdcconversion
+    calcrpoaavg --> calcbifaciality(Bifaciality) --> calcdcconversion
+    style POAcalc fill:yellow
+    style dbWS fill:yellow
+    style dbTa fill:yellow
+    style calcacpwr fill:yellow
+    style calcrpoaavg fill:lightgreen
+    style calcrpoaout fill:yellow 
+  end
+  fieldalbedo[Albedo] --> fieldreartransp
+  fieldalbedo --> calcreartransp
+```
+
+:::
+:::{.column width="50%"}
+
+- Proposed extended modeling equation:
+
+$$
+\begin{aligned}
+P = &(E_\mathrm{front} + E_\mathrm{rear}) \cdot ( a_1 \\
+    &+ a_{2a} \cdot E_\mathrm{front} + a_{2b} \cdot E_\mathrm{rear} \\
+    &+ a_3 \cdot T_a + a_4 \cdot v)
+\end{aligned}
+$$
+
+- Placement of sensor in POA outboard position facing rear is sufficient for additional field measurement
+- Having a separate coefficient for rear irradiance allows the regression to quantify rear loss mechanisms independently 
+- Additional calculation based on standard modeling hourly modeling variables needed for corresponding regression fit to modeled system
+
+:::
+::::
+
+## Theory: PVsyst variables
+
+The PVsyst $\mathrm{GlobBak}$ output is a naive candidate for comparison with sensors, but this quantity represents a _spatial average_ irradiance that is also _obstructed by structural shading_ objects. So an unobstructed average irradiance could be
+$$
+\begin{aligned}
+\mathrm{GlobBakUnshd} &= \mathrm{GlobBak} + \mathrm{BackShd} \\
+&\stackrel{?}{=} E_\mathrm{pvsyst,rear}
+\end{aligned}
+$${#eq-globbakunshd}
+
+except that reliably getting short-interval measurements is non-trivial. While being computed in opposite directions, we do observe that $\mathrm{GlobBakUnshd}$ agrees with the $E_\mathrm{pvsyst,rear}$ computed from the various irradiance components.
+
+## Theory : Outboard SAT mounting
+
+![Mounting a rear facing sensor adjacent to the equator end of a tracker row](diagrams/down_view_longarray.png){#fig-down-view-longarray}
+
+- Locate along torque tube to avoid vertical motion throughout the day.
+- Rolls with tracker: this non-vertical placement means this is not an "albedo" measurement.
+- Suggested to use albedometer equipment due to shield configuration (don't use a standard up-facing "horizon" shield).
+- Hemisphere used to illustrate field of view of instrument.
+
+## Theory : Shade angle and sensor view of shade line
+
+::::{.columns}
+:::{.column width="50%"}
+
+![Sun geometry](diagrams/down_view_sungeom.png){#fig-fig-down-view-sungeom}
+
+:::
+:::{.column width="50%"}
+
+The planar shade angle $\phi$ can be obtained by projecting the cosine of the PVsyst sun elevation angle $\mathrm{HSol}$ using the cosine of the PVsyst azimuth angle $\mathrm{AzSol}$ as in @eq-cos_phi:
+$$
+\cos{\phi} = \cos{\left(\mathrm{AzSol}\right)} \cos{\left(\mathrm{HSol}\right)}
+$${#eq-cos_phi}
+Note that the planar shade angle $\phi$ in this diagram is different than the PVsyst $\mathrm{PhiAng}$ tracker rotation angle.
+
+:::
+::::
+
+## Theory : Sensor view of shade line
+
+::::{.columns}
+:::{.column width="50%"}
+
+![Sun geometry](diagrams/down_view_flat.png){#fig-fig-down-view-flat}
+
+:::
+:::{.column width="50%"}
+
+- There are two supplementary "wedges" in the hemisphere, corresponding to irradiance exposure from fully-unshaded and striped-shade ground
+
+- The wedge angle $\psi$ can be computed using @eq-psi-atan2:
+$$
+\begin{align}
+\tan{\psi}
+&= \frac{H}{L + H / \tan{\phi}} \\
+&= \frac{H \sin{\phi}}{L \sin{\phi} + H \cos{\phi}}
+\end{align}
+$${#eq-psi-atan2}
+There is also a trigonometric reduction in the write-up. 
+
+- We will assume irradiance is isotropic in two "wedges"... irradiance density passing through each wedge is uniform
+  - The "shades stripes" are non-uniform, but PVsyst provides an average value and the error in assuming uniformity is surprisingly small.
+
+:::
+::::
+
+## Theory : $W$ and unshaded upwelling irradiance
+
+::::{.columns}
+:::{.column width="50%"}
+
+![Unshaded wedge in flat configuration](diagrams/down_view_flatunsh.png){#fig-down-view-flatunsh}
+
+:::
+:::{.column width="50%"}
+
+With $\psi$ computed, the relative weighting factor $W$ of the unshaded ground can be computed from the isotropic view factor equation:
+$$
+W = \tfrac{1+\cos{\psi}}{2}
+$${#eq-w}
+
+
+The diffuse irradiance corresponding to the unshaded wedge is the weighting factor times the upwelling irradiance as in @eq-e-gnd-nadir-unshaded:
+$$
+E_\mathrm{gnd,nadir,unshaded} = W \cdot \mathrm{GlobHor} \cdot \mathrm{albedo}_\mathrm{near}
+$${#eq-e-gnd-nadir-unshaded}
+
+:::
+::::
+
+
+## Theory : $1-W$ and shaded upwelling irradiance
+
+::::{.columns}
+:::{.column width="40%"}
+
+![Shaded wedge in flat configuration](diagrams/down_view_flatgw.png){#fig-down-view-flatgw}
+
+:::
+:::{.column width="60%"}
+
+From review of the PVsyst loss tree, without applying any wedge calculations PVsyst estimates the raw (prior to structural shading) irradiance available to the rear side from the ground as in @eq-e-gnd-rear-shaded-average:
+$$
+\begin{align}
+& E_\mathrm{gnd,rear,shaded,average} = \\
+& \mathrm{GlobGnd} \cdot \tfrac{\mathrm{albedo}_\mathrm{near}}{\mathrm{GCR}} - \mathrm{BkVFLss}
+\end{align}
+$${#eq-e-gnd-rear-shaded-average}
+
+From the perspective of the outboard sensor, only a fraction of the irradiance received from the ground arises from shaded ground, so we multiply by $(1-W)$ as in @eq-e-gnd-rear-shaded-flat:
+$$
+\begin{align}
+& E_\mathrm{gnd,rear,shaded,flat} = \\
+& (1 - W) \cdot \left(\mathrm{GlobGnd} \cdot \tfrac{\mathrm{albedo}_\mathrm{near}}{\mathrm{GCR}} - \mathrm{BkVFLss} \right)
+\end{align}
+$${#eq-e-gnd-rear-shaded-flat}
+
+:::
+::::
+
+
+## Theory : Rotating view of ground by tracking
+
+::::{.columns}
+:::{.column width="50%"}
+
+![Tracker roll view effects](diagrams/down_view_roll.png){#fig-down-view-roll}
+
+:::
+:::{.column width="50%"}
+
+- When the tracker rotates, part of each of the wedges of unshaded and shaded ground move out of view and a new wedge of sky is added to what the sensor can see.
+- Here we again apply a second application of isotropic partitioning, even though the rotation angle is perpendicular to the previous partitioning. We have used both Euler integration and a Computer Algebra System to confirm that the the worst case error anisotropic error is less than 1.6% of rear irradiance and the MAD was less than 0.3%. Since rear irradiance is rarely more than 10% this implies a worst case capacity impact of less than 0.16%.
+
+:::
+::::
+
+## Theory : Tracked unshaded ground diffuse
+
+::::{.columns}
+:::{.column width="50%"}
+
+![Unshaded wedge with tracker roll](diagrams/down_view_rollugw.png){#fig-down-view-rollugw}
+
+:::
+:::{.column width="50%"}
+
+$$
+\begin{align}
+& E_\mathrm{gnd,rear,unshaded} = \\
+& W \cdot \mathrm{GlobHor} \cdot \mathrm{albedo}_\mathrm{near} \\
+& \cdot \tfrac{1 + \cos{\mathrm{PhiAng}}}{2}
+\end{align}
+$${#eq-e-gnd-rear-unshaded}
+
+- This step reduces the contribution of $E_\mathrm{gnd,nadir,unshaded}$ due to tracker roll using the isotropic reduction term.
+
+:::
+::::
+
+
+## Theory : Tracked shaded ground diffuse
+
+::::{.columns}
+:::{.column width="50%"}
+
+![Shaded ground wedge with tracker roll](diagrams/down_view_rollgw.png){#fig-down-view-rollgw}
+
+:::
+:::{.column width="50%"}
+
+- Accounting for roll with the same approximation:
+
+$$
+\begin{align}
+& E_\mathrm{gnd,rear,shaded} = \\
+& (1 - W) \\
+& \cdot \left(\mathrm{GlobGnd} \cdot \tfrac{\mathrm{albedo}_\mathrm{near}}{\mathrm{GCR}} - \mathrm{BkVFLss} \right) \\
+& \cdot \tfrac{1 + \cos{\mathrm{PhiAng}}}{2}
+\end{align}
+$${#eq-e-gnd-rear-shaded}
+
+
+:::
+::::
+
+
+## Theory : Shaded fraction and addition of components
+
+The shaded and unshaded contributions are added to estimate the irradiance from the ground as in @eq-e-gnd-rear:
+$$
+E_\mathrm{gnd,rear} =
+E_\mathrm{gnd,rear,unshaded} + E_\mathrm{gnd,rear,shaded}
+$${#eq-e-gnd-rear}
+
+The diffuse irradiance from the sky can be modeled by combining the ground, sky, and beam contributions:
+$$
+E_\mathrm{rear} = E_\mathrm{gnd,rear} + \mathrm{DifSBak} + \mathrm{BmIncBk}
+$${#eq-e-rear}
+where $\mathrm{DifSBak}$ and $\mathrm{BmIncBk}$ are as computed by PVsyst.
+
+## Results : $E_\mathrm{rear}$ vs. $\mathtt{GlobBakUnsh}$ (w/ $\mathtt{Tilt}$)
+
+::::{.columns}
+:::{.column width="65%"}
+
+```{python}
+#|  label: fig-e-rear-tilt
+#|  fig-cap: Comparison of computed sensor readings versus unshaded PVsyst GlobBak colored by tilt angle
+(
+  p9.ggplot(
+    bdta_aug.reset_index()
+    , p9.aes(x='GlobBakUnshd', y='E_rear', color='Tilt')
+  )
+  + p9.geom_point(size=1, alpha=0.2)
+  + p9.geom_abline(linetype='dashed')
+  + p9.facet_wrap('~ Position', ncol=2)
+  + p9.coord_fixed(ratio=0.7)
+  + p9.labs(
+    x=r'$\mathtt{GlobBackUnshd}~\left[\mathrm{W}\mathrm{m}^{-2}\right]$'
+    , y=r'$E_{\mathrm{rear}}~\left[\mathrm{W}\mathrm{m}^{-2}\right]$'
+    , color=r'$\mathtt{Tilt}~\left[{}^\circ \right]$'
+  )
+)
+```
+
+
+:::
+:::{.column width="35%"}
+
+- PVsyst simulation 8760 hours, compare estimated outboard sensor with theoretical under-array irradiance
+- At low rear irradiance values the omission of diffuse shade on the ground (using sharp shade line) in the model may be affecting correlation
+  + Also, the actual irradiance contributions under these conditions may not support a high correlation even if the model is improved
+
+:::
+::::
+
+## Results : $E_\mathrm{rear}$ vs. $\mathtt{GlobBakUnsh}$ (w/ $\mathtt{Tilt}$, filtered)
+
+```{python}
+#|  label: fig-e-rear-tilt-erear75
+#|  fig-cap: Comparison of computed sensor readings versus unshaded PVsyst GlobBak colored by tilt angle, $75 \le E_\mathrm{rear}$
+(
+  p9.ggplot(
+    bdta_aug.loc[bdta_aug['E_rear'].ge(75.), :].reset_index()
+    , p9.aes(x='GlobBakUnshd', y='E_rear', color='Tilt')
+  )
+  + p9.geom_point(size=1, alpha=0.2)
+  + p9.geom_abline(linetype='dashed')
+  + p9.facet_wrap('~ Position', ncol=2)
+  + p9.coord_fixed(ratio=0.7)
+  + p9.labs(
+    x=r'$\mathtt{GlobBackUnshd}~\left[\mathrm{W}\mathrm{m}^{-2}\right]$'
+    , y=r'$E_{\mathrm{rear}}~\left[\mathrm{W}\mathrm{m}^{-2}\right]$'
+    , color=r'$\mathtt{Tilt}~\left[{}^\circ \right]$'
+  )
+)
+```
+
+
+## Conclusions
+
+- Use of two averaged sensors at 20% and 80% per NREL recommendation is likely to show a low bias in long-term averages, but in capacity tests the spatial complexity seen in short term data described by McIntosh @mcintoshEffectNonuniformIllumination2019 is not well addressed.
+- Reference modules are completely insensitive to rear shade implementation discrepancies.
+- Obtaining sensor readings representative of average rear side irradiance is challenging, and generally requires averaging over long periods (energy tests).
+- Modeled behavior of an outboard rear-facing sensor is shown to follow a linear relationship with the modeled spatially-averaged unshaded rear irradiance over roughly half of the range of values.
+  + A restriction on rear irradiance may be necessary to bypass the poor correlation at low rear irradiance values.
+
+## References
+
+::: {#refs}
+:::

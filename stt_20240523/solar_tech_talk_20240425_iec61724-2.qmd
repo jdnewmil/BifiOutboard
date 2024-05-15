@@ -1,0 +1,585 @@
+---
+title: "IEC 61724-2 Performance Test"
+author: "Jeff Newmiller"
+date: 2024-04-25
+format:
+  revealjs:
+    embed-resources: true
+    width: 1920
+    height: 1080
+    mainfont: Daytona
+    logo: images/DNV_logo_RGB.png
+execute: 
+  echo: false
+---
+
+```{r,warning=FALSE}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+  library(gt)
+})
+
+font_title <- "Tahoma"
+font_text <- "Daytona"
+font_accent <- "Fira Sans"
+
+color_base <- "#1C5253"
+color_text <- "#272822"
+color_bg <- "#FFFFFF"
+color_accent <- "#EB811B"
+
+color_base_light <- xaringanthemer::lighten_color(color_base, strength = 0.33)
+color_accent_light <- xaringanthemer::lighten_color(color_accent, strength = 0.33)
+grey <- scales::alpha("grey", 0.7)
+
+blend_colors <- function(x, y, alpha = 0.5) {
+  x <- colorspace::hex2RGB(x)
+  y <- colorspace::hex2RGB(y)
+  z <- colorspace::mixcolor(alpha, x, y)
+  colorspace::hex(z)
+}
+color_blender <- function(x, y) function(alpha = 0.5) blend_colors(x, y, alpha)
+theme_quarto <- function (
+    text_color = color_text,
+    background_color = color_bg,
+    text_font = font_text,
+    text_font_size = 30,
+    accent_color = color_base,
+    title_font = font_title,
+    title_font_size = 30
+){
+    blend <- color_blender(text_color, background_color)
+    ggplot2::theme(
+        line = ggplot2::element_line(color = blend(0.2)),
+        rect = ggplot2::element_rect(fill = background_color),
+        title = ggplot2::element_text(
+            color = accent_color,
+            family = title_font,
+            size = title_font_size
+        ),
+        plot.background = ggplot2::element_rect(
+            fill = background_color,
+            color = background_color
+        ),
+        panel.background = ggplot2::element_rect(
+            fill = background_color,
+            color = background_color
+        ),
+        panel.grid.major = ggplot2::element_line(
+            color = blend(0.8),
+            inherit.blank = TRUE
+        ),
+        panel.grid.minor = ggplot2::element_line(
+            color = blend(0.9),
+            inherit.blank = TRUE
+        ),
+        axis.title = ggplot2::element_text(size = title_font_size * 0.8),
+        axis.ticks = ggplot2::element_line(color = blend(0.8)),
+        axis.text = ggplot2::element_text(color = blend(0.4), size = title_font_size * 0.7),
+        legend.key = ggplot2::element_rect(fill = "transparent", colour = NA),
+        legend.text = ggplot2::element_text(size = title_font_size * 0.8, family = title_font),
+        plot.caption = ggplot2::element_text(
+            size = text_font_size * 0.8,
+            color = blend(0.3)
+        )
+    )
+}
+theme_set(theme_quarto())
+```
+
+
+## Outline
+
+- Problem
+- Theory
+- Strengths and weaknesses
+- Working group draft comments
+
+## Problem
+
+A solar photovoltaic (PV) power plant construction involves integrating many components. How can the buyer/investor be assured that the *equipment* is functioning as a complete system as intended? 
+
+- Solution concept is to operate the plant briefly and confirm that it performs as expected.
+- Often there is pressure to approve plant completion when the solar resource is very low... we don't have control over the weather so we cannot always make an accurate judgement on equipment behavior with insufficient irradiance or confounding effects like ice on the modules until weather improves.
+
+Keep in mind that the single most important performance characteristic of PV equipment is the amount of power you will get out of it at specified exposure conditions. Modules are almost always rated at Standard Test Conditions (incident irradiance $1000\tfrac{W}{m^2}$, cell temperature $25^\circ \mathrm{C}$, standard spectrum consistent with air mass 1.5), but systems are more often rated at lower irradiance (to avoid extrapolated results beyond the clipping irradiance) and higher cell temperature (e.g. $45^\circ \mathrm{C}$).
+
+Also, a grid-connected PV system has additional losses outside the modules, so even if the rating conditions are the same as STC the system rating will typically be lower than the sum of module ratings. 
+
+## Theory
+
+- A performance trend over time of an arbitrarily complicated system, compared with the output of a perfect model given the same inputs, should be equal at all times.
+  + Example model:
+```{r}
+sys1 <- data.frame(
+  P_stc = 12
+  , betaPmp = -0.0035
+  , tare = 0.25
+  , ohmic_frac = 0.05
+  , clip = 10
+)
+gt(sys1)
+```
+
+- We can take the measured performance and plot on the x-axis, and feed the same solar resource inputs into the model and plot corresponding time values on the y-axis and we should get a straight line with a slope of 1:
+
+```{r}
+model1 <- function( G, Tc, P_stc, betaPmp, tare, ohmic_frac, clip ) {
+  P <- P_stc * ( G /1000 ) * (1 + betaPmp * ( Tc - 25 ) )
+  P <- P - P^2 / P_stc * ohmic_frac
+  P <- P - tare
+  P <- pmin( P, clip )
+  P
+}
+model1sys <- function( G, Tc, sys ) {
+  do.call( model1, c( list( G = G, Tc = Tc) , as.list( sys ) ) )
+}
+sys1a <- data.frame(
+  P_stc = 12 * 1.1
+  , betaPmp = -0.0035
+  , tare = 0.25
+  , ohmic_frac = 0.05
+  , clip = 10
+)
+
+trc1 <- (
+  data.frame(
+    G = 720
+    , Tc = 45
+  )
+  |> mutate(
+    P_predtarg = model1sys( G, Tc, sys1 )
+  )
+)
+
+
+dta1 <- (
+  data.frame( t = seq( 0, 24, 0.1 ) )
+  |> mutate(
+    G = pmax( 0, 1000 * cos( pi/12 * ( t - 12 ) ) )
+    , Tc = 35 - 10 * sin( pi / 12 * ( t ) )
+    , P_expected = model1sys( G, Tc, sys1 )
+    , P_perfect = P_expected
+  )
+)
+```
+
+:::{layout-ncol=2}
+
+```{r}
+#| label: fig-trend1
+#| fig-cap: Trend
+(
+  ggplot( dta1, aes( x = t, y = P_expected ) )
+  + geom_point( size = 3 )
+  + labs(
+    x = "Time"
+    , y = expression( P[expected] )
+  )
+)
+```
+
+```{r}
+#| label: fig-xy1
+#| fig-cap: (Perfect) Measured vs. Expected
+(
+  ggplot( dta1, aes( x = P_expected, y = P_perfect ) )
+  + geom_point( size = 3 )
+  + labs(
+    x = expression( P[expected] )
+    , y = expression( P[measured] )
+  )
+)
+```
+
+:::
+
+## Theory (Clipping)
+
+::::{.columns}
+
+:::{.column width="35%"}
+
+```{r}
+dta2 <- (
+  dta1
+  |> mutate(
+    P_exceeding = model1sys( G, Tc, sys1a )
+    , P_predmeas = P_expected
+    , CF_exceeding = trc1$P_predtarg / P_predmeas
+    , slope_exceeding = P_exceeding / P_expected
+    , intercept_exceeding = 0.0
+  )
+)
+```
+
+```{r}
+#| label: fig-xy-clip
+#| fig-cap: High measured kWp with clipping
+#| fig-asp: 1
+(
+  ggplot( dta2, aes( x = P_expected, y = P_exceeding ) )
+  + geom_point( size = 3 )
+  + labs(
+    x = expression( P[expected] )
+    , y = expression( P[measured] )
+  )
+  + geom_abline(
+    slope=1
+    , color = "green"
+    , size = 1
+  )
+  + geom_abline(
+    mapping = aes(
+      slope = slope_exceeding
+      , intercept = intercept_exceeding
+    )
+    , color="blue"
+    , alpha = 0.2
+    , linetype = "dashed"
+    , size = 1
+  )
+)
+
+```
+
+
+:::
+
+:::{.column width="65%"}
+
+If the fielded system has a higher capacity than planned, then more clipping will occur than the predictions would expect:
+
+- Example high kWp system (10% high for clarity):
+```{r}
+gt(sys1a)
+```
+- The performance for each point is indicated by the slope of a line from the origin through that point.
+  + ... but points in the unexpected clipping region case show a variety of low slopes indicating poor performance even though the equipment is working better than planned.
+- To avoid including this misleading information the standard allows exclusion of constrained operation like clipping.
+
+In addition, slopes for points at very low power can behave very different than higher power levels.
+
+- Removal of clipped and low-power values can improve the accuracy of the performance evaluation.
+
+:::
+
+::::
+
+## Data exclusions
+
+::::{.columns}
+
+:::{.column width="50%"}
+
+
+| Variable            | Units                     | Retention Range                           |
+|---------------------|---------------------------|-------------------------------------------|
+| Irradiance          | $-$                       | $0.5 < G / G_{\mathrm{TRC}} < 1.2$        |
+| Ambient Temperature | ${}^\circ \mathrm{C}$     | $-10 \le T_a \le 50$                      |
+| Wind Speed          | $\mathrm{m}/\mathrm{s}$   | $0.5 \le v \le 15$                        |
+| AC Power            | $-$                       | $-0.1 \le P/P_{\mathrm{rating}} \le 1.02$ |
+
+
+:::
+
+:::{.column width="50%"}
+
+- Section 6.2.2 discusses suggested allowable data exclusions. Different models are allowed and may accept different input variables, but Target Reference Conditions and constraints must be tailored to those inputs. The standard offers some typical items:
+  + Irradiance (plane-of-array), ambient temperature, wind speed as inputs
+  + AC power as output
+- Suggested flag types include:
+  + Range limits for input or output variables
+  + Dead values ("stuck")
+  + Abrupt changes and stability (rates of change)
+  + Inverter status (depending on inverter model the status can identify clipping and other constrained operation clearly)
+
+:::
+
+::::
+
+
+## Theory (Correct measured power to target reference condition)
+
+::::{.columns}
+
+:::{.column width="40%"}
+
+```{r}
+dta3 <- (
+  dta2
+  |> rename(
+    Raw_meas = P_exceeding
+    , Raw_expected = P_expected
+  )
+  |> mutate(
+    Corrected_expected = trc1$P_predtarg
+    , Corrected_meas = CF_exceeding * Raw_meas
+    , qc = ifelse(
+      G / trc1$G < 0.5
+      | 1.2 < G / trc1$G
+      | Raw_meas > 9.9
+      , "Filtered"
+      , "Ok" )
+  )
+  |> pivot_longer(
+    cols = c( "Raw_expected", "Raw_meas", "Corrected_expected", "Corrected_meas" )
+    , names_to = c( "Type", ".value" )
+    , names_sep = "_"
+  )
+)
+
+results1 <- (
+  dta3
+  |> filter( "Corrected" == Type )
+  |> group_by( qc )
+  |> summarise(
+    `mean(P_corr)` = mean( meas )
+  )
+)
+```
+
+```{r}
+#| label: fig-xy-correct
+#| fig-cap: High measured kWp with clipping
+#| fig-asp: 1
+(
+  ggplot( dta3, aes( x = expected, y = meas, alpha = qc, color = Type ) )
+  + geom_point( size = 3 )
+  + scale_color_manual( values = c( "black", "red" ) )
+  + scale_alpha_manual( values = c( 0.2, 1 ) )
+  + labs(
+    x = expression( P[expected] )
+    , y = expression( P[measured] )
+  )
+  + geom_abline(
+    slope=1
+    , color = "green"
+    , size = 1
+  )
+  + geom_abline(
+    mapping = aes(
+      slope = slope_exceeding
+      , intercept = intercept_exceeding
+    )
+    , color="blue"
+    , alpha = 0.2
+    , linetype = "dashed"
+    , size = 1
+  )
+)
+
+```
+
+:::
+
+:::{.column width="60%"}
+
+- Field measurements at many field conditions (e.g. irradiances and temperatures) need to be corrected as though they all occurred at the same target conditions.
+- IEC61724-2:2016 defines a method:
+  + $P_{\mathrm{corr}} = \frac{P_{\mathrm{predtarg}}}{P_{\mathrm{predmeas}}}  P_{\mathrm{meas}} = \mathrm{CF} \cdot P_{\mathrm{meas}} = P_{\mathrm{predtarg}} \frac{P_{\mathrm{meas}}}{P_{\mathrm{predmeas}}}$
+- Figure shows how filtered (transparent) data points do not get included in the calculation, and the "secret knowledge" model result at reference conditions is $`r sprintf("%.2f", with( trc1, model1sys( G, Tc, sys1a ) ) )`$:
+```{r}
+gt(trc1) |> fmt_number( columns = 3, decimals = 2)
+```
+
+```{r}
+gt(results1) |> gt::fmt_number(decimals = 2)
+```
+
+:::
+
+::::
+
+
+## Theory (DRAFT 2023 Pass/Fail)
+
+::::{.columns}
+
+:::{.column width="40%"}
+
+```{r}
+calc_means <- function( dta, x_col, y_col ) {
+  list(
+    x_mean = mean( dta[[ x_col ]] )
+    , y_mean = mean( dta[[ y_col ]] )
+  )
+}
+```
+
+```{r}
+```
+
+
+```{r}
+#| label: fig-xy2
+#| fig-cap: Proposed 
+#| fig-asp: 1
+# fig-width: 6.5
+# fig-dpi: 300
+dta4 <- dta3 |> filter( "Raw" == Type )
+fig_xy2_means <- calc_means( dta4 |> filter( "Ok" == qc ), "expected", "meas" )
+(
+  ggplot( dta4, aes( x = expected, y = meas, alpha = qc ) )
+  + geom_point( size = 3 )
+  + scale_color_manual( values = c( "black", "red" ) )
+  + scale_alpha_manual( values = c( 0.2, 1 ) )
+  + labs(
+    x = expression( P[expected] )
+    , y = expression( P[measured] )
+  )
+  + geom_abline(
+    slope=1
+    , color = "green"
+    , size = 1
+  )
+  + geom_vline(
+    xintercept = fig_xy2_means$x_mean
+    , color="blue"
+    , linetype = "dashed"
+    , size = 1
+  )
+  + geom_hline(
+    yintercept = fig_xy2_means$y_mean
+    , color="blue"
+    , linetype = "dashed"
+    , size = 1
+  )
+  + geom_abline(
+    slope = with( fig_xy2_means, y_mean / x_mean )
+    , color="blue"
+    , linetype = "dashed"
+    , size = 1
+  )
+)
+```
+
+:::
+
+:::{.column width="60%"}
+
+- The 2016 correction approach is somewhat complicated, and gives equal weight to all data points, including ones with lower impact on energy production.
+- The proposed 2023 replacement approach uses a simple ratio of sums ("power performance index" defined in IEC 61724-1):
+$$
+\mathrm{PPI} = \frac{\sum_i P_i^{\mathrm{measured}}}{\sum_i P_i^{\mathrm{expected}}} = \frac{\mathrm{mean}\left(P^{\mathrm{measured}} \right)}{\mathrm{mean}\left(P^{\mathrm{expected}} \right)}
+$$
+- This approach implicitly gives more weight to categories of data points that contribute more energy: higher power points individually, and bands input variables that have more data points collectively.
+  + There is no guarantee that the distribution of data acquired for the test will be representative of longer term operating conditions, so this may not be a compelling advantage.
+- The 2016 standard suggests four possible ways of formulating the final comparison, which can make interpreting results more complicated than it needs to be.
+
+:::
+
+::::
+
+## Strengths and weaknesses
+
+::::{.columns}
+
+:::{.column width="40%"}
+
+Strengths
+
+- Allows for arbitrary prediction models
+  + Does not make simplifying assumptions about local linearity like ASTM2848
+- 2023 PPI metric does not assume proportionality between power values
+
+:::
+
+:::{.column width="60%"}
+
+Weaknesses
+
+- Model must use same inputs as used for reference conditions (ASTM2848 relaxes this requirement)
+  + ASTM2848 can handle a GHI-based model like PVsyst using POA-based measurements and target reference conditions. PVsyst can import POA at fixed orientations and reverse-calculate GHI, but not (currently) for trackers.
+- Model needs to be flexible to use data for other than hourly averages.
+  + ASTM2848 can use different averaging intervals for measured and target determination.
+  + Tedious to import and model data at non-hourly intervals in PVsyst.
+- 2016 correction procedure assumes proportionality holds for measured and predicted power values
+  - with appropriate data exclusions, the impact of this weakness should normally be small
+
+
+:::
+
+::::
+
+## 2023 DRAFT Comments
+
+::::{.columns}
+
+:::{.column width="50%"}
+
+- Introduction of ten formal "test elections"... alternate paths in the procedure
+  + Solar resource (e.g. POA vs GHI)
+  + Irradiance sensor type (e.g. broadband, refcell, or refmodule)
+  + Temperature (e.g back-of-module or ambient)
+  + Soiling (e.g. cleaning, compensating by altering model inputs, or as-is)
+  + Tracker operation (e.g. hold trackers fixed to reduce clipping, or not)
+
+:::
+
+:::{.column width="50%"}
+
+- Continued...
+  + Performance model (several, including one that uses an approximating model ala ASTM)
+  + Partial shading (exclude or include)
+  + Plant design (pre-construction or as-found)
+  + Plant "sectioning" (complete system, or incremental partial tests)
+  + Parameter limits (per suggestion, or custom)
+
+:::
+
+::::
+
+## 2023 DRAFT Comments (Bifacial)
+
+::::{.columns}
+
+:::{.column width="40%"}
+
+Module total irradiance:
+
+$$
+G_{\mathrm{poa,total}} = G_{\mathrm{poa,front}} + \varphi_{\mathrm{mod}} G_{\mathrm{poa,rear}}
+$$
+
+System total irradiance:
+
+$$
+G_{\mathrm{poa,total}} = G_{\mathrm{poa,front}} + \varphi_{\mathrm{structure}} \varphi_{\mathrm{mod}} G_{\mathrm{poa,rear}}
+$$
+
+where the effect of $\varphi_{\mathrm{structure}}$ on capacity is also of interest to the buyer.
+
+:::
+
+:::{.column width="60%"}
+
+- Explicit allowance for bifacial performance evaluation
+- Recommends combining front POA with module bifaciality times rear POA if software does not support separate inputs
+  + many pitfalls here
+  + does not address excessive rear structural shade
+  + does not address non-uniformity of shading near rear POA sensor
+  + mentions NREL papers on sensor placement
+- Subset of working group is trying out various "test elections" to start to characterize how consistent results will be using different combinations
+  + not very many examples yet
+  + some test elections lead to noticeable discrepancies
+  + work in progress
+
+:::
+
+::::
+
+
+## Conclusion
+
+- Clean theoretical basis... as long as the measured values closely follow the predicted values.
+- IEC 61724-2:2016 is a headache if PVsyst is the reference model and POA is used
+  + reversible POA-to-GHI import using Hay model... must alter model to use Hay to maintain POA agreement with input
+  + Hourly data processing does not line up easily with field data
+- 2023 DRAFT is probably not very close to approval
+  + PPI seems better than correction method
+  + Inconsistency in results depending on "test elections" selected
+  + Option to "emulate" ASTM adaptability with inflexible models like PVsyst by replacing the full model with a regression model
+

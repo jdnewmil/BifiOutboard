@@ -1,0 +1,652 @@
+---
+title: "Bifacial capacity testing rear-side irradiance challenges"
+author: "Jeff Newmiller"
+date: 2024-05-22
+format:
+  revealjs:
+    embed-resources: true
+    width: 1920
+    height: 1080
+    #mainfont: Daytona
+    logo: images/DNV_logo_RGB.png
+    theme: simple
+    mermaid: 
+      theme: neutral
+execute: 
+  echo: false
+---
+
+```{python}
+#|  execute:
+#|    error: false
+#|    warning: false
+import pathlib
+import collections
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+#import seaborn as sns
+import bifi_outboard as bo
+#import bifi_outboard.captest as ct
+import plotnine as p9
+```
+
+
+```{python}
+dta_dir = pathlib.Path('..') / 'data'
+shts = pd.read_excel(dta_dir / 'Inventory.xlsx', sheet_name=None, header=0)
+shts['Sites'] = shts['Sites'].set_index('SiteLabel')
+shts['Systems'] = shts['Systems'].set_index('SystemLabel')
+shts['PVsyst Runs'] = shts['PVsyst Runs'].set_index(['prj_file', 'variant'])
+```
+
+```{python}
+# sample_sat1 = {
+#     'latitude': 33.45
+#     , 'longitude': -111.983
+#     , 'height': 2
+#     , 'offset': 10
+#     , 'albedo_near': 0.2
+#     , 'GCR': 0.493
+# }
+```
+
+```{python}
+run_info = (
+    shts['PVsyst Runs']
+    .loc[('Test Bifi SAT_Project.PRJ', 'SAT Az0 (bifi)'), :])
+bdta = bo.pvcaptest.io.load_pvsyst_df(
+    dta_dir / run_info['Csvfile'])
+sys_info = shts['Systems'].loc[run_info['SystemLabel'], :]
+site_info = shts['Sites'].loc[run_info['SiteLabel'], :]
+```
+
+```{python}
+cases = pd.DataFrame(
+    {'offset': [-100, 1]}
+    , index = pd.Index(['Under', 'Adjacent'], name='Position'))
+```
+
+```{python}
+# def calc_E_rear(bdta: pd.DataFrame, height: float, offset: float) -> pd.DataFrame:
+#     return (
+#         bdta
+#         .assign(
+#             AzSol_rad=lambda df: np.deg2rad(df['AzSol'])
+#             , HSol_rad=lambda df: np.deg2rad(df['HSol'])
+#             # , betasun=lambda df: bo.outboard_sat.calc_betasun(
+#             #     AzSol_rad=df['AzSol_rad']
+#             #     , HSol_rad=df['HSol_rad'])
+#             , phi_rad=lambda df: np.arccos(
+#                 bo.outboard_sat.calc_cosphi(
+#                     AzSol_rad=df['AzSol_rad']
+#                     , HSol_rad=df['HSol_rad']))
+#             , phi_deg=lambda df: np.rad2deg(df['phi_rad'])
+#             # , psi0_rad=lambda df: bo.outboard_sat.calc_psi_atan2(
+#             #     phi_rad=df['phi_rad']
+#             #     , height=sample_sat1['height']
+#             #     , offset=sample_sat1['offset'])
+#             , psi_rad=lambda df: bo.outboard_sat.calc_psi(
+#                 phi_rad=df['phi_rad']
+#                 , height=height
+#                 , offset=offset)
+#             , psi_deg=lambda df: np.rad2deg(df['psi_rad'])
+#             , PhiAng_rad=lambda df: np.deg2rad(df['PhiAng'])
+#             # , GlobGnd_calc=lambda df: calc_GlobGnd(
+#             #     GlobHor=df['GlobHor']
+#             #     , DiffHor=df['DiffHor']
+#             #     , betasun=df['betasun']
+#             #     , GCR=sample_sat1['GCR'])
+#             , GlobBakUnshd=lambda df: df['GlobBak'] + df['BackShd']
+#             , W=lambda df: bo.outboard_sat.calc_W(
+#                 psi_rad=df['psi_rad'])
+#             # , E_sky_rear=lambda df: bo.outboard_sat.calc_E_sky_rear(
+#             #     DiffHor=df['DiffHor']
+#             #     , PhiAng_rad=df['PhiAng_rad'])
+#             , E_gnd_rear=lambda df: bo.outboard_sat.calc_E_gnd_rear(
+#                 GlobGnd=df['GlobGnd']
+#                 , GlobHor=df['GlobHor']
+#                 , PhiAng_rad=df['PhiAng_rad']
+#                 , BkVFLss=df['BkVFLss']
+#                 , W=df['W']
+#                 , albedo_near=run_info['NearAlbedo']
+#                 , GCR=sys_info['GCR'])
+#             , E_rear=lambda df: df['E_gnd_rear'] + df['DifSBak'] + df['BmIncBk']
+#             , E_tot0=lambda df: df['GlobInc'] + df['GlobBak']))
+
+
+def augment_E_rear(er_df: pd.DataFrame) -> pd.DataFrame:
+  return (
+    er_df
+    .assign(
+        GlobBakUnshd=lambda df: df['GlobBak'] + df['BackShd']
+        , DiffuseFraction=lambda df: df['DiffHor'] / df['GlobHor']
+        , Tilt=lambda df: np.abs(df['PhiAng'])
+    )
+  )
+
+
+def assign_E_rear(
+  bdta: pd.DataFrame
+  , height: float
+  , offset: float
+  , gcr: float
+  , near_albedo: float
+) -> pd.DataFrame:
+  edta = bo.outboard_sat.calc_E_rear(
+    height=height
+    , offset=offset
+    , AzSol=bdta['AzSol']
+    , HSol=bdta['HSol']
+    , PhiAng=bdta['PhiAng']
+    , GlobHor=bdta['GlobHor']
+    , GlobGnd=bdta['GlobGnd']
+    , BkVFLss=bdta['BkVFLss']
+    , DifSBak=bdta['DifSBak']
+    , BmIncBk=bdta['BmIncBk']
+    , GCR=gcr
+    , NearAlbedo=near_albedo)
+  result = bdta.copy()
+  result[edta.columns] = edta
+  return result
+```
+
+```{python}
+bdta_aug = pd.concat(
+    [
+      augment_E_rear(
+        assign_E_rear(
+          bdta=bdta
+          , height=run_info['Height']
+          , offset=off
+          , gcr=sys_info['GCR']
+          , near_albedo=run_info['NearAlbedo']))
+      for off in cases['offset']]
+    , keys=cases.index
+    , names=[cases.index.name, 'Timestamp'])
+```
+
+
+## Outline
+
+- Problem
+- Context
+- Theory
+- Simulations
+- Conclusions
+
+## Problem
+
+- Capacity testing of bifacial photovoltaic power systems needs measurements of input irradiance on the rear of the array to avoid attributing rear side irradiance performance contribution to the equipment.
+- Rear side irradiance varies across the back of a PV array (x and y) as well as perpendicular to the rear laminate surface (z) and this 3d shade pattern varies independently from front side irradiance as time (t) progresses.
+- Questions:
+  + What irradiance boundary is appropriate for system power capacity testing?
+  + Where should we place an irradiance sensor to obtain readings representative of that rear side boundary?
+  + Will this measurement location be representative during the short time intervals used for capacity testing?
+
+## Context: IEC61724-2 Strategy
+
+```{mermaid}
+%%| label: fig-iec-strategy-simple
+%%| fig-cap: IEC 61724-2 Flow of information
+%%| fig-width: 4
+%%| fig-height: 2
+flowchart LR
+  field[Field Data] --> sensors[Sensors] --> Modeling -- Expected Power --> Comparison
+  field -- Measured Power --> Comparison
+```
+
+::::{.columns}
+:::{.column width="60%"}
+
+- Measured power compared with modeled power
+  + Model yields expected power output for each field data record
+  + Measured power should be equal to expected power for all records
+  + Comparison identifies overall result
+- Requires flexible model
+  + Must accept POA as input
+  + Must support calculations at arbitrary times and intervals
+
+:::
+:::{.column width="40%"}
+
+- Observed resource inputs form common basis for comparison
+  + Assumes each point determines a measured:modeled slope that can be extrapolated
+    - This is only approximately true for a limited range of conditions
+
+:::
+::::
+
+## Context : ASTM-E2848 Strategy
+
+```{mermaid}
+%%| label: fig-astm-strategy-simple
+%%| fig-cap: ASTM E2848 Flow of information
+flowchart LR
+  wthrdb[Weather Database] --> modeling(Modeling) --> modelregress(Model Regression) --> modelpredict(Modeled Capacity Prediction) -- Expected Capacity --> compare[Comparison]
+  field[PV Plant] --> Sensors(Sensors) --> ref(Select Reference Conditions) --> modelpredict
+  Sensors --> measregress(Measured Regression) --> measpredict(Measured Capacity Prediction) -- Measured Capacity --> compare
+  ref --> measpredict
+```
+
+
+- Two multi-variable regressions
+  + Field data regression
+  + Modeled data regression
+- Supports proprietary models
+  + Or models that do not allow injection of POA
+- Reference conditions form common basis for comparison
+  + Prediction of measured capacity and target capacity using regression fits
+  + The common input is the reference conditions... the simulation weather can be different than the measured weather
+
+## Context : Regression against derived variable POA
+
+```{mermaid}
+flowchart LR
+  subgraph System under test
+    direction LR
+    GHImeas[GHI] --> transpmeas(Front Transposition) --> POAmeas[POA] --> irrmodelsfield(Shade/Reflection/Spectrum) --> effpoafield[EffPOA] --> fielddcconversion(DC Conversion) --> fielddcpwr[DC Power] --> invfield(AC Conversion) --> measacpwr[AC Power]
+    measWS[Wind Speed] & measTa[Ambient Temp] --> fieldthermal(Thermal) --> measTc(Cell Temp) --> fielddcconversion
+    style POAmeas fill:yellow
+    style measWS fill:yellow
+    style measTa fill:yellow
+    style measacpwr fill:yellow
+  end
+  subgraph Modeled system
+    direction LR
+    GHIdb[Typ GHI] --> transpcalc(Front Transposition) --> POAcalc[Typ POA] --> irrmodelscalc(Shade/Reflection/Spectrum) --> effpoacalc[Typ EffPOA] --> calcdcconversion(DC Conversion) --> calcdcpwr[DC Power] --> invcalc(AC Conversion) --> calcacpwr[AC Power]
+    dbWS[Typ Wind Speed] & dbTa[Typ Ambient Temp] --> calcthermal(Thermal) --> calcTc(Cell Temp) --> calcdcconversion
+    style POAcalc fill:yellow
+    style dbWS fill:yellow
+    style dbTa fill:yellow
+    style calcacpwr fill:yellow
+  end
+```
+
+- Existing ASTM E2848 Regression equation:
+  + $P = E \cdot \left( a_1 + a_2 \cdot E + a_3 \cdot T_a + a_4 * v \right)$
+    - $E$ is (front-side) plane-of-array irradiance, not in diffuse shade
+    - $T_a$ is ambient temperature
+    - $v$ is wind speed
+- Yellow variables in diagram are used to fit the regression models
+
+## System boundaries and insensitivity
+
+- ASTM specifies ambient temperature with wind speed, rather than cell temperature
+  + If module temperature were used and the energy model failed to account for obstructed cooling, then a hot module would simply be expected to produce less power and the regression prediction would "correct" for the hot array
+  + If a specified reference ambient temperature is used, then failure to model the module temperature properly will affect the modeled power and thus possibly affect the outcome of the test
+- Similarly, if the total irradiance is measured using a bifacial reference module, the test will be insensitive to changes in module bifaciality or rear structural shading.
+  + Structural members placed behind the modules will not affect the outcome of the test.
+
+## Concept : Outboard rear pyranometer
+
+- Front-side POA sensors have traditionally been placed adjacent to the array
+  + Along top edge for fixed arrays
+  + Along tracker axis for SAT
+- Why not install a sensor facing in the opposite direction as the front sensor as an "unobstructed proxy" sensor?
+  + Such a placement has an inherent measurement bias... but as long as it is linearly correlated with the spatial-average $\mathtt{GlobBak}$ value that is easy to calculate but difficult to measure, then we should be able to predict P from the outboard sensor equally as well as the $\mathtt{GlobBak}$ value.
+    = This correlation is demonstrated under certain conditions later in this presentation.
+
+## Outboard Measurement Strategy
+
+::::{.columns}
+:::{.column width="50%"}
+
+```{mermaid}
+flowchart LR
+  subgraph System under test
+    direction LR
+    GHImeas[GHI] --> transpmeas(Front Transposition) --> POAmeas[POA] --> irrmodelsfield(Shade/Reflection/Spectrum) --> effpoafield[EffPOA] --> fielddcconversion(DC Conversion) --> fielddcpwr[DC Power] --> invfield(AC Conversion) --> measacpwr[AC Power]
+    GHImeas --> fieldreartransp(Rear Transposition) --> fieldrpoaavg[RPOA avg] --> fieldoutboardposition(Outboard Position) --> fieldrpoaout[RPOA outboard]
+    fieldrpoaavg --> fieldbifaciality(Bifaciality) --> fielddcconversion
+    measWS[Wind Speed] & measTa[Ambient Temp] --> fieldthermal(Thermal) --> measTc(Cell Temp) --> fielddcconversion
+    style POAmeas fill:yellow
+    style measWS fill:yellow
+    style measTa fill:yellow
+    style measacpwr fill:yellow
+    style fieldrpoaavg fill:tomato
+    style fieldrpoaout fill:yellow 
+  end
+  subgraph Modeled system
+    direction LR
+    GHIdb[Typ GHI] --> transpcalc(Front Transposition) --> POAcalc[Typ POA] --> irrmodelscalc(Shade/Reflection/Spectrum) --> effpoacalc[Typ EffPOA] --> calcdcconversion(DC Conversion) --> calcdcpwr[DC Power] --> invcalc(AC Conversion) --> calcacpwr[AC Power]
+    GHIdb --> calcreartransp(Rear Transposition) --> calcrpoaavg[RPOA avg] --> calcoutboardposition(Outboard Position) --> calcrpoaout[RPOA outboard]
+    dbWS[Typ Wind Speed] & dbTa[Typ Ambient Temp] --> calcthermal(Thermal) --> calcTc(Cell Temp) --> calcdcconversion
+    calcrpoaavg --> calcbifaciality(Bifaciality) --> calcdcconversion
+    style POAcalc fill:yellow
+    style dbWS fill:yellow
+    style dbTa fill:yellow
+    style calcacpwr fill:yellow
+    style calcrpoaavg fill:lightgreen
+    style calcrpoaout fill:yellow 
+  end
+  fieldalbedo[Albedo] --> fieldreartransp
+  fieldalbedo --> calcreartransp
+```
+
+:::
+:::{.column width="50%"}
+
+- Proposed extended modeling equation:
+  + $P = E_\mathrm{tot} \cdot \left( a_1 + a_2a \cdot E_\mathrm{front} + a_2b \cdot E_\mathrm{rear} + a_3 \cdot T_a + a_4 * v \right)$
+- Placement of sensor in POA outboard position facing rear is sufficient for additional field measurement
+- Having a separate coefficient for rear irradiance allows the regression to quantify rear loss mechanisms independently 
+- Additional calculation based on standard modeling hourly modeling variables needed for corresponding regression fit to modeled system
+
+:::
+::::
+
+## Theory : PVsyst variables
+
+- $\mathrm{GlobGnd}$: an estimate for a spatially-averaged irradiance on the ground below the trackers. This calculation accounts for the reduction in direct irradiance into strips between the rows, as well as obstruction of diffuse irradance.
+- $\mathrm{GlobGnd}$ is multiplied by ground albedo to get an estimate of spatially-averaged upwelling irradiance under the array.
+- This horizontal upwelling irradiance is then converted to a tilted orientation by dividing by GCR.
+- Then a portion of that irradiance that escapes upward to the sky between the rows ($\mathrm{BkVFLss}$ estimated by view-factor geometry) is subtracted to obtain the internally-computed component of rear irradiance $E_\mathrm{pvsyst,rear,gnd}$ originating from the ground.
+- $\mathrm{DifSBak}$: component of rear side diffuse irradiance originating from the sky, computed from the isotropic diffuse using the wedge formula, and an average near shade impact from adjacent rows is subtracted. In general the pre-structural-shade rear irradiance estimate obtained by PVsyst is:
+
+$$
+\begin{aligned}
+E_\mathrm{pvsyst,rear} &= E_\mathrm{pvsyst,rear,gnd} \\
+&+ \mathrm{DifSBak} \\
+&+ \mathrm{BeamBak}
+\end{aligned}
+$${#eq-e_pvsyst_rear}
+
+and then obtains the final estimate of rear side irradiance as in @eq-globbak:
+
+$$
+\mathrm{GlobBak} = E_\mathrm{pvsyst,rear} - \mathrm{BackShd}
+$${#eq-globbak}
+
+
+## Theory: PVsyst variables continued
+
+The PVsyst $\mathrm{GlobBak}$ output is a naive candidate for comparison with sensors, but this quantity represents a _spatial average_ irradiance that is also _obstructed by structural shading_ objects. So an unobstructed average irradiance could be
+$$
+\begin{aligned}
+\mathrm{GlobBakUnshd} &= \mathrm{GlobBak} + \mathrm{BackShd} \\
+&\stackrel{?}{=} E_\mathrm{pvsyst,rear}
+\end{aligned}
+$${#eq-globbakunshd}
+
+except that being outboard in a SAT configuration exposes the sensor to additional irradiance. While computed differently, we do observe that $\mathrm{GlobBakUnshd}=E_\mathrm{pvsyst,rear}$.
+
+## Theory : East-west shadow line
+
+![Height-offset diagram of SAT outboard sensor, viewed from west in the northern hemisphere or from the east in southern hemisphere](../analysis/figures/bifi-tracker-sensor-geometry2.svg){#fig-offset}
+
+- Point $A$: An outboard rear-facing irradiance sensor
+- $L$: offset distance from edge of modules along the torque-tube in the direction of the equator
+- $H$: height of down facing sensor.
+- $B$: The edge of a block of trackers (perpendicular to the page) casts ($\overline{EB}$) an approximate "shade line" on the ground in the east-west direction (perpendicular to the page at $D$), disregarding the sawtooth pattern arising from tracker rotation and the interruptions due to tracker row spacing.
+
+## Theory : Shade angle and sensor view of shade line
+
+The planar shade angle $\phi$ can be obtained by projecting the cosine of the PVsyst sun elevation angle $\mathrm{HSol}$ using the cosine of the PVsyst azimuth angle $\mathrm{AzSol}$ as in @eq-cos_phi:
+$$
+\cos{\phi} = \cos{\left(\mathrm{AzSol}\right)} \cos{\left(\mathrm{HSol}\right)}
+$${#eq-cos_phi}
+Note that the planar shade angle $\phi$ in this diagram is different than the PVsyst $\mathrm{PhiAng}$ tracker rotation angle.
+
+The unshaded ground wedge angle $\psi$ can be computed using either @eq-psi-atan2:
+$$
+\psi = \mathrm{atan2}\left(
+  H \sin{\phi}
+  , L \sin{\phi} + H \cos{\phi}\right)
+$${#eq-psi-atan2}
+where $\mathrm{atan2}(y,x)$ is a standard four-quadrant numerical library arctangent function, or equivalently using @eq-psi-acos:
+$$
+\psi = \cos^{-1}{\left(\frac
+{L \sin{\phi} + H \cos{\phi}}
+{\sqrt{L^2 \sin^2{\phi} + 2 L H \sin{\phi} \cos{\phi} + H^2}}\right)}
+$${#eq-psi-acos}
+because only two quadrants are of interest.
+
+## Theory : $W$ and unshaded upwelling irradiance
+
+With $\psi$ computed, the relative weighting factor $W$ of the unshaded ground can be computed:
+$$
+W = \tfrac{1+\cos{\psi}}{2}
+$${#eq-w}
+
+
+The diffuse irradiance upwelling from the unshaded ground is just the albedo times the global horizontal irradiance (neglecting the diffuse shading below point $B$), or $E_\mathrm{upwelling,unshaded}=\mathrm{GlobHor} \cdot \mathrm{albedo}_\mathrm{near}$. The diffuse irradiance from the unshaded portion of the ground on a down-facing outboard sensor ($E_\mathrm{gnd,nadir,unshaded}$) may be approximated as irradiance from an isotropic wedge from a nadir-facing hemisphere that omits the row-shaded (north-south shade striped) portion of the ground left of point $D$ (shade line) using @eq-e-gnd-nadir-unshaded:
+$$
+E_\mathrm{gnd,nadir,unshaded} = W \cdot \mathrm{GlobHor} \cdot \mathrm{albedo}_\mathrm{near}
+$${#eq-e-gnd-nadir-unshaded}
+
+## Theory : Rotating view of ground by tracking
+
+Once the outboard sensor rotates with the tracker then the visible portion of the unshaded ground will be further reduced by a perpendicular wedge slice arising from the row rotation. While not an exact calculation, the shading wedge fraction can be multiplied by the tracking rotation wedge fraction as in @eq-e-gnd-rear-unshaded with less than 1% relative error for most cases, which is on the order of a 0.01% absolute error due to the rear-side energy contribution typically being on the order of 10% of the front-side irradiance contribution.
+$$
+E_\mathrm{gnd,rear,unshaded} = W \cdot \mathrm{GlobHor} \cdot \mathrm{albedo}_\mathrm{near} \cdot \tfrac{1 + \cos{\mathrm{PhiAng}}}{2}
+$${#eq-e-gnd-rear-unshaded}
+
+The remaining contribution from the ground arises from the stripes of unshaded and shaded ground north of the east-west "shade line". PVsyst provides the estimate of average downward irradiance underneath the array (including unshaded stripes) as $\mathrm{GlobGnd}$ which incorporates direct and diffuse shade obstruction from the moving trackers. The reflected irradiance is $\mathrm{GlobGnd} \cdot \mathrm{albedo}_\mathrm{near}$, and the intensity is scaled to the tracker tilt using the ratio of ground area to module area, which is equivalent to dividing by GCR. The upwelling shaded irradiance that misses the trackers (lost to the sky) is $\mathrm{BkVFLss}$. Thus, without applying any wedge calculations PVsyst estimates the raw (prior to structural shading) irradiance available to the rear side from the ground as in @eq-e-gnd-rear-shaded-average:
+$$
+E_\mathrm{gnd,rear,shaded,average} = \mathrm{GlobGnd} \cdot \tfrac{\mathrm{albedo}_\mathrm{near}}{\mathrm{GCR}} - \mathrm{BkVFLss}
+$${#eq-e-gnd-rear-shaded-average}
+
+## Theory : Shaded fraction and addition of components
+
+From the perspective of the outboard sensor, only a fraction of the irradiance received from the ground arises from shaded ground, so we multiply by $(1-W)$ as in @eq-e-gnd-rear-shaded:
+$$
+E_\mathrm{gnd,rear,shaded} = (1 - W) \cdot \left(\mathrm{GlobGnd} \cdot \tfrac{\mathrm{albedo}_\mathrm{near}}{\mathrm{GCR}} - \mathrm{BkVFLss} \right)
+$${#eq-e-gnd-rear-shaded}
+
+The shaded and unshaded contributions are added to estimate the irradiance from the ground as in @eq-e-gnd-rear:
+$$
+E_\mathrm{gnd,rear} =
+E_\mathrm{gnd,rear,unshaded} + E_\mathrm{gnd,rear,shaded}
+$${#eq-e-gnd-rear}
+
+The diffuse irradiance from the sky can be modeled by combining the ground, sky, and beam contributions:
+$$
+E_\mathrm{rear} = E_\mathrm{gnd,rear} + \mathrm{DifSBak} + \mathrm{BmIncBk}
+$${#eq-e-rear}
+where $\mathrm{DifSBak}$ and $\mathrm{BmIncBk}$ are as computed by PVsyst.
+
+## Results : $E_\mathrm{rear}$ vs. $\mathtt{GlobBakUnsh}$ (w/ $\mathtt{GlobInc}$)
+
+::::{.columns}
+:::{.column width="65%"}
+
+```{python}
+#|  label: fig-e-rear-poa
+#|  fig-cap: Comparison of computed sensor readings versus unshaded PVsyst GlobBak colored by GlobInc
+(
+  p9.ggplot(
+    bdta_aug.reset_index()
+    , p9.aes(x='GlobBakUnshd', y='E_rear', color='GlobInc')
+  )
+  + p9.geom_point(size=1, alpha=0.2)
+  + p9.geom_abline(linetype='dashed')
+  + p9.facet_wrap('~ Position', ncol=2)
+  + p9.coord_fixed(ratio=0.7)
+  + p9.labs(
+    x=r'$\mathtt{GlobBackUnshd}~\left[\mathrm{W}\mathrm{m}^{-2}\right]$'
+    , y=r'$E_{\mathrm{rear}}~\left[\mathrm{W}\mathrm{m}^{-2}\right]$'
+    , color=r'$\mathtt{GlobInc}~\left[ \mathrm{W}\mathrm{m}^{-2} \right]$'
+  )
+)
+```
+
+:::
+:::{.column width="35%"}
+
+- PVsyst simulation 8760, compare estimated outboard sensor with theoretical under-array irradiance
+- At low rear irradiance values the omission of diffuse shade on the ground (using sharp shade line) in the model may be affecting correlation
+  + Also, the actual irradiance contributions under these conditions may not support a high correlation even if the model is improved
+
+:::
+::::
+
+## Results : $E_\mathrm{rear}$ vs. $\mathtt{GlobBakUnsh}$ (w/ $\mathtt{Tilt}$)
+
+```{python}
+#|  label: fig-e-rear-tilt
+#|  fig-cap: Comparison of computed sensor readings versus unshaded PVsyst GlobBak colored by tilt angle
+(
+  p9.ggplot(
+    bdta_aug.reset_index()
+    , p9.aes(x='GlobBakUnshd', y='E_rear', color='Tilt')
+  )
+  + p9.geom_point(size=1, alpha=0.2)
+  + p9.geom_abline(linetype='dashed')
+  + p9.facet_wrap('~ Position', ncol=2)
+  + p9.coord_fixed(ratio=0.7)
+  + p9.labs(
+    x=r'$\mathtt{GlobBackUnshd}~\left[\mathrm{W}\mathrm{m}^{-2}\right]$'
+    , y=r'$E_{\mathrm{rear}}~\left[\mathrm{W}\mathrm{m}^{-2}\right]$'
+    , color=r'$\mathtt{Tilt}~\left[{}^\circ \right]$'
+  )
+)
+```
+
+
+## Results : $E_\mathrm{rear}$ vs. $\mathtt{GlobBakUnsh}$ (w/ $\mathtt{Tilt}$, filtered)
+
+```{python}
+#|  label: fig-e-rear-tilt-erear75
+#|  fig-cap: Comparison of computed sensor readings versus unshaded PVsyst GlobBak colored by tilt angle, $75 \le E_\mathrm{rear}$
+(
+  p9.ggplot(
+    bdta_aug.loc[bdta_aug['E_rear'].ge(75.), :].reset_index()
+    , p9.aes(x='GlobBakUnshd', y='E_rear', color='Tilt')
+  )
+  + p9.geom_point(size=1, alpha=0.2)
+  + p9.geom_abline(linetype='dashed')
+  + p9.facet_wrap('~ Position', ncol=2)
+  + p9.coord_fixed(ratio=0.7)
+  + p9.labs(
+    x=r'$\mathtt{GlobBackUnshd}~\left[\mathrm{W}\mathrm{m}^{-2}\right]$'
+    , y=r'$E_{\mathrm{rear}}~\left[\mathrm{W}\mathrm{m}^{-2}\right]$'
+    , color=r'$\mathtt{Tilt}~\left[{}^\circ \right]$'
+  )
+)
+```
+
+## Results : Monthly ASTM E2848 Capacity estimate
+
+::::{.columns}
+:::{.column}
+
+```{python}
+monthly_fits = ctpci.mr_fitconf_combine(
+    ti0.model_runner(
+        gdf=qcdta.resample('MS')
+        , gdf_columns=qcdta.columns)
+    , key_name='MonthBegin')
+```
+
+
+```{python}
+#| label: fig-monthly-fits-mono
+#| fig-cap: Monthly ASTM Monofacial fits
+(
+    p9.ggplot(
+        monthly_fits.reset_index()
+        , p9.aes(x='MonthBegin', y='fit', ymin='lwr', ymax='upr'))
+    + p9.geom_errorbar()
+    + p9.geom_point()
+)
+```
+
+:::
+:::{.column}
+
+- Same system simulation all cases
+- Reference QC is
+  + $400 \le E$: typical constraint and $P \le \max{(P)}$ 
+- Simulation data is hourly, so test interval was one month to get more data records
+
+:::
+::::
+
+## Conclusions
+
+- Use of two averaged sensors at 20% and 80% per NREL recommendation is likely to show a low bias in long-term averages, but in capacity tests the spatial complexity described by McIntosh (2019) is not well addressed.
+- Modeled behavior of an outboard rear-facing sensor is shown to follow a linear relationship with the modeled spatially-averaged unshaded rear irradiance over part of the range of values.
+  + A restriction on rear irradiance may be necessary to bypass the poor correlation at low rear irradiance values.
+
+## Extra material
+
+## IEC detailed computation sequence
+
+```{mermaid}
+%%| label: fig-iec-computations
+%%| fig-cap: IEC 61724-2 computation sequence
+flowchart LR
+  subgraph field
+    POA & Ta[Ambient Temperature] & WindSpeed --> plant(Plant) --> Power
+  end
+  subgraph sensors
+    pyfront(Front Pyranometer)
+    ptd(RTD)
+    Anemometer
+    pwrxducer(Power Transducer)
+  end
+  subgraph modeling
+    POAdata(GlobInc) & Tadata(T Amb) & WSdata(WindVel) --> plantmodel(Plant Model) --> Pwrdata(Pcalc)
+    Pmeas
+  end
+  subgraph comparison
+    Result
+  end
+  POA --> pyfront --> POAdata
+  Ta --> ptd --> Tadata
+  WindSpeed --> Anemometer --> WSdata
+  Power --> pwrxducer --> Pmeas --> Result
+  Pwrdata --> Result
+```
+
+## ASTM detailed computation sequence
+
+```{mermaid}
+%%| label: fig-astm-computations
+%%| fig-cap: ASTM E2848 computation sequence
+flowchart LR
+  subgraph weatherdb
+    GHIdb[GHI]
+    Tadb[Ambient Temperature]
+    WSdb[Wind Speed]
+  end
+  subgraph field
+    POA & Ta[Ambient Temperature] & WindSpeed(Wind Speed) --> plant(Plant) --> Power
+  end
+  subgraph sensors
+    pyfront(Front Pyranometer)
+    ptd(RTD)
+    Anemometer
+    pwrxducer(Power Transducer)
+  end
+  subgraph reference
+    pyfront --> POArc[POA ref]
+    ptd --> Tarc[Ta ref]
+    Anemometer --> WSrc[WS ref]
+  end
+  subgraph modeling
+    GHIdb --> Transposition --> GlobInc
+    plantmodel(Plant Model)
+    GlobInc & Tadb(T Amb) & WSdb --> plantmodel --> Pcalc
+  end
+  subgraph fieldregression
+    pyfront & ptd & Anemometer & pwrxducer --> OLSfield(Multiple Regression) --> FieldRegression[Field Prediction]
+    POArc & Tarc & WSrc --> FieldRegression --> MC
+  end
+  subgraph targetregression
+    GlobInc & Tadb & WSdb & Pcalc --> OLStarget(Multiple Regression) --> TargetRegression[Target Prediction]  
+    POArc & Tarc & WSrc --> TargetRegression --> TC
+  end
+  subgraph comparison
+    TC & MC --> Result
+  end
+  POA --> pyfront
+  Ta --> ptd
+  WindSpeed --> Anemometer
+  Power --> pwrxducer
+  
+```
+
+
+##

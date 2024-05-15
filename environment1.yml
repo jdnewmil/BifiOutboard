@@ -1,0 +1,23 @@
+name: pvcaptest3
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pvcaptest
+  - jupyter_bokeh
+  - tox
+  - pytest
+  - ipykernel
+  - nbclient
+  - nbformat
+  - seaborn
+  - librsvg
+  - plotnine
+  - pvlib
+  - yaml
+  - param
+  - scipy
+  - scikit-learn
+  - statsmodels
+#prefix: C:\Users\JNEWM\AppData\Local\miniconda3\envs\pvcaptest
