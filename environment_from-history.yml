@@ -1,0 +1,23 @@
+name: bifioutboard
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - openpyxl
+  - tox
+  - pytest
+  - ipykernel
+  - nbclient
+  - nbformat
+  - librsvg
+  - matplotlib
+  - plotnine
+  - mizani
+  - pyyaml
+  - ruamel.yaml
+  - param
+  - statsmodels
+  - pip
